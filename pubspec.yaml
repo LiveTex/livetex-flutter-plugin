@@ -1,0 +1,8 @@
+name: livetex_flutter_plugin_workspace
+publish_to: "none"
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dev_dependencies:
+  melos: ^7.7.0
