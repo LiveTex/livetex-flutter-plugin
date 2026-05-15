@@ -10,6 +10,7 @@ import "package:photo_view/photo_view.dart";
 import "package:url_launcher/url_launcher.dart";
 
 import "livetex_chat_theme.dart";
+import "widgets/rating_widget.dart";
 
 /// Drop-in full-screen chat. Defaults to [LivetexChatTheme.livetex] (native
 /// Android `demo-lib` look). Pass [theme] to override.
@@ -50,6 +51,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   DateTime? _lastTypingSent;
 
   bool _afterConnectDone = false;
+  bool _topRatingShownOnce = false;
 
   @override
   void initState() {
@@ -78,7 +80,15 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         }
       }),
       _chat.dialogState.listen((d) {
-        if (mounted) setState(() => _dialog = d);
+        if (mounted) {
+          setState(() {
+            _dialog = d;
+            final enabled = d?.rate?.enabledType?.isNotEmpty ?? false;
+            if (enabled && d!.status != DialogStatus.unassigned) {
+              _topRatingShownOnce = true;
+            }
+          });
+        }
       }),
       _chat.messages.listen((m) {
         if (mounted) {
@@ -338,12 +348,12 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         builder: (innerCtx) {
           final d = _dialog;
           final rate = d?.rate;
-          final showTopRating = rate != null &&
-              rate.enabledType != null &&
-              rate.enabledType!.isNotEmpty &&
+          final hasRate = rate != null && (rate.enabledType?.isNotEmpty ?? false);
+          final showTopRating = hasRate &&
               d != null &&
-              d.status != DialogStatus.unassigned &&
-              rate.isSet == null;
+              (d.status != DialogStatus.unassigned || _topRatingShownOnce);
+          final showBottomRating =
+              hasRate && d != null && d.status == DialogStatus.unassigned;
           return Scaffold(
             backgroundColor: theme.background,
             appBar: AppBar(
@@ -369,13 +379,36 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
                     state: _conn,
                     onRetry: () => _chat.connect(),
                   ),
-                if (showTopRating) _RatingStrip(chat: _chat, rate: rate),
+                if (showTopRating)
+                  RatingWidget(
+                    key: ValueKey(
+                      "top-${rate.isSet?.value ?? ""}-${rate.enabledType}",
+                    ),
+                    rate: rate,
+                    background: theme.ratingPanelBackground,
+                    initiallyExpanded: false,
+                    onSubmit: (value, comment) => _chat.sendRating(
+                      rateType: rate.enabledType!,
+                      value: value,
+                      comment: comment,
+                    ),
+                  ),
                 Expanded(
                   child: _MessageList(
                     messages: _messages,
                     scroll: _scroll,
                     typingVisible: _typingVisible,
                     operatorName: d?.employee?.name,
+                    bottomRating: showBottomRating
+                        ? _BottomRatingDescriptor(
+                            rate: rate,
+                            onSubmit: (value, comment) => _chat.sendRating(
+                              rateType: rate.enabledType!,
+                              value: value,
+                              comment: comment,
+                            ),
+                          )
+                        : null,
                   ),
                 ),
                 if (d != null &&
@@ -452,83 +485,11 @@ String _connLabel(LivetexConnectionState c) {
   };
 }
 
-class _RatingStrip extends StatelessWidget {
-  const _RatingStrip({required this.chat, required this.rate});
+class _BottomRatingDescriptor {
+  const _BottomRatingDescriptor({required this.rate, required this.onSubmit});
 
-  final LivetexChat chat;
   final DialogRateState rate;
-
-  @override
-  Widget build(BuildContext context) {
-    // Stage 2 will redesign this to match native (stars + comment + submit).
-    // Stage 1 keeps a temporary panel using LivetexChatTheme tokens so it
-    // doesn't pull purple from the host's Material 3 default.
-    final theme = LivetexChatTheme.of(context);
-    final t = rate.enabledType ?? "";
-    return Material(
-      color: theme.ratingPanelBackground,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (rate.textBefore != null && rate.textBefore!.trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  rate.textBefore!.trim(),
-                  style: TextStyle(fontSize: 12, color: theme.systemText),
-                ),
-              ),
-            if (t == "doublePoint")
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => _send("0"),
-                      child: const Text("Плохо"),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: theme.ratingButton,
-                        foregroundColor: theme.ratingButtonText,
-                      ),
-                      onPressed: () => _send("1"),
-                      child: const Text("Хорошо"),
-                    ),
-                  ),
-                ],
-              )
-            else if (t == "fivePoint")
-              Wrap(
-                spacing: 6,
-                children: [
-                  for (final v in const ["1", "2", "3", "4", "5"])
-                    FilledButton.tonal(
-                      onPressed: () => _send(v),
-                      child: Text(v),
-                    ),
-                ],
-              )
-            else
-              Text(
-                "Оценка ($t) — отправьте вручную через API",
-                style: TextStyle(fontSize: 12, color: theme.systemText),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _send(String value) {
-    final rt = rate.enabledType;
-    if (rt == null) return;
-    chat.sendRating(rateType: rt, value: value);
-  }
+  final void Function(String value, String? comment) onSubmit;
 }
 
 class _MessageList extends StatelessWidget {
@@ -537,16 +498,25 @@ class _MessageList extends StatelessWidget {
     required this.scroll,
     required this.typingVisible,
     required this.operatorName,
+    required this.bottomRating,
   });
 
   final List<ChatMessage> messages;
   final ScrollController scroll;
   final bool typingVisible;
   final String? operatorName;
+  final _BottomRatingDescriptor? bottomRating;
 
   @override
   Widget build(BuildContext context) {
-    final items = _buildListItems(messages, typingVisible, operatorName);
+    final theme = LivetexChatTheme.of(context);
+    final items = _buildListItems(
+      messages,
+      typingVisible,
+      operatorName,
+      bottomRating,
+      theme,
+    );
     return ListView.builder(
       controller: scroll,
       padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
@@ -560,6 +530,8 @@ List<Widget> _buildListItems(
   List<ChatMessage> messages,
   bool typingVisible,
   String? operatorName,
+  _BottomRatingDescriptor? bottomRating,
+  LivetexChatTheme theme,
 ) {
   final out = <Widget>[];
   DateTime? prevDay;
@@ -575,7 +547,37 @@ List<Widget> _buildListItems(
   if (typingVisible) {
     out.add(_TypingTile(operatorName: operatorName));
   }
+  if (bottomRating != null) {
+    out.add(_BottomRatingCard(descriptor: bottomRating));
+  }
   return out;
+}
+
+class _BottomRatingCard extends StatelessWidget {
+  const _BottomRatingCard({required this.descriptor});
+
+  final _BottomRatingDescriptor descriptor;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = LivetexChatTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(theme.cardRadius),
+        child: RatingWidget(
+          key: ValueKey(
+            "bottom-${descriptor.rate.isSet?.value ?? ""}-${descriptor.rate.enabledType}",
+          ),
+          rate: descriptor.rate,
+          background: theme.incomingBubble,
+          initiallyExpanded: true,
+          padding: const EdgeInsets.all(16),
+          onSubmit: descriptor.onSubmit,
+        ),
+      ),
+    );
+  }
 }
 
 class _DateSeparator extends StatelessWidget {
