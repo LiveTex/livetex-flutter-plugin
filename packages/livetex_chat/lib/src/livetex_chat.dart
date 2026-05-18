@@ -287,6 +287,8 @@ final class LivetexChat {
           isVisitor: creator.creatorType == "visitor",
           text: content,
           creatorLabel: _creatorLabel(creator),
+          creatorType: creator.creatorType,
+          avatarUrl: creator.employee?.avatarUrl,
           keyboard: keyboard,
           sendState: ChatMessageSendState.none,
         );
@@ -305,6 +307,8 @@ final class LivetexChat {
           fileName: name,
           fileUrl: url,
           creatorLabel: _creatorLabel(creator),
+          creatorType: creator.creatorType,
+          avatarUrl: creator.employee?.avatarUrl,
           sendState: ChatMessageSendState.none,
         );
         _upsert(row);

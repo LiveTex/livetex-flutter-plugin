@@ -383,7 +383,15 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
                 borderRadius: BorderRadius.circular(theme.controlRadius),
                 borderSide: BorderSide(color: theme.composerFieldStroke),
               ),
+              // Without an explicit focusedBorder Material 3 draws the
+              // theme seed color (purple by default) when the field is
+              // focused. Pin it to the LiveTex blue used elsewhere.
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(theme.controlRadius),
+                borderSide: BorderSide(color: theme.outgoingBubble, width: 1.5),
+              ),
             ),
+            cursorColor: theme.outgoingBubble,
           ),
         ],
         const SizedBox(height: 16),

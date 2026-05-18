@@ -29,7 +29,7 @@ class MessageTile extends StatelessWidget {
 
   final ChatMessage message;
 
-  bool get _isSystem => message.creatorLabel == "Система";
+  bool get _isSystem => message.creatorType == "system";
 
   @override
   Widget build(BuildContext context) {
@@ -61,9 +61,20 @@ class MessageTile extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               if (!isVisitor) ...[
-                const _OperatorAvatar(),
+                _OperatorAvatar(avatarUrl: message.avatarUrl),
                 const SizedBox(width: 6),
               ],
+              // Time + delivery icons go beside the bubble (visitor: to its
+              // left, operator: to its right) — matches native sdk-ui where
+              // short messages don't get squashed into a circle by an
+              // inside-bubble timestamp.
+              if (isVisitor)
+                _BubbleMeta(
+                  createdAt: message.createdAt,
+                  sendState: message.sendState,
+                  isVisitor: true,
+                ),
+              if (isVisitor) const SizedBox(width: 4),
               Flexible(
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
@@ -76,11 +87,16 @@ class MessageTile extends StatelessWidget {
                     fileUrl: message.fileUrl,
                     isImage: isImage,
                     isFile: isFile,
-                    createdAt: message.createdAt,
-                    sendState: message.sendState,
                   ),
                 ),
               ),
+              if (!isVisitor) const SizedBox(width: 4),
+              if (!isVisitor)
+                _BubbleMeta(
+                  createdAt: message.createdAt,
+                  sendState: message.sendState,
+                  isVisitor: false,
+                ),
             ],
           ),
         ],
@@ -89,20 +105,85 @@ class MessageTile extends StatelessWidget {
   }
 }
 
-class _OperatorAvatar extends StatelessWidget {
-  const _OperatorAvatar();
+/// Time + delivery icon rendered OUTSIDE the bubble (mirrors native sdk-ui).
+/// Keeping these out of the bubble lets short messages render at their
+/// natural width — a one-character reply doesn't get inflated into a circle
+/// by an inside-bubble timestamp.
+class _BubbleMeta extends StatelessWidget {
+  const _BubbleMeta({
+    required this.createdAt,
+    required this.sendState,
+    required this.isVisitor,
+  });
+
+  final DateTime createdAt;
+  final ChatMessageSendState sendState;
+  final bool isVisitor;
 
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
-    return Container(
-      width: 32,
-      height: 32,
-      decoration: BoxDecoration(
-        color: theme.incomingBubble,
-        shape: BoxShape.circle,
+    final timeColor = theme.incomingTime;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (sendState == ChatMessageSendState.sending) ...[
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: timeColor,
+              ),
+            ),
+            const SizedBox(width: 4),
+          ],
+          if (sendState == ChatMessageSendState.failed) ...[
+            const Icon(Icons.error_outline, size: 14, color: Colors.red),
+            const SizedBox(width: 4),
+          ],
+          if (sendState == ChatMessageSendState.sent && isVisitor) ...[
+            Icon(Icons.done_all, size: 14, color: timeColor),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            DateFormat.Hm().format(createdAt.toLocal()),
+            style: TextStyle(fontSize: 11, color: timeColor),
+          ),
+        ],
       ),
-      child: Icon(Icons.support_agent, size: 18, color: theme.systemText),
+    );
+  }
+}
+
+class _OperatorAvatar extends StatelessWidget {
+  const _OperatorAvatar({this.avatarUrl});
+
+  final String? avatarUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = LivetexChatTheme.of(context);
+    final hasUrl = avatarUrl != null && avatarUrl!.isNotEmpty;
+    return ClipOval(
+      child: Container(
+        width: 32,
+        height: 32,
+        color: theme.incomingBubble,
+        child: hasUrl
+            ? CachedNetworkImage(
+                imageUrl: avatarUrl!,
+                fit: BoxFit.cover,
+                errorWidget: (_, __, ___) => Icon(
+                  Icons.support_agent,
+                  size: 18,
+                  color: theme.systemText,
+                ),
+              )
+            : Icon(Icons.support_agent, size: 18, color: theme.systemText),
+      ),
     );
   }
 }
@@ -115,8 +196,6 @@ class _MessageBubble extends StatelessWidget {
     required this.fileUrl,
     required this.isImage,
     required this.isFile,
-    required this.createdAt,
-    required this.sendState,
   });
 
   final bool isVisitor;
@@ -125,15 +204,12 @@ class _MessageBubble extends StatelessWidget {
   final String? fileUrl;
   final bool isImage;
   final bool isFile;
-  final DateTime createdAt;
-  final ChatMessageSendState sendState;
 
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
     final bg = isVisitor ? theme.outgoingBubble : theme.incomingBubble;
     final fg = isVisitor ? theme.outgoingText : theme.incomingText;
-    final timeFg = isVisitor ? Colors.white70 : theme.incomingTime;
     final imageUrl = isImage
         ? (fileUrl ?? (_isImageUrl(text) ? text : null))
         : null;
@@ -219,42 +295,6 @@ class _MessageBubble extends StatelessWidget {
                 text!,
                 style: TextStyle(fontSize: 16, color: fg),
               ),
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (sendState == ChatMessageSendState.sending) ...[
-                    SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 1.5,
-                        color: timeFg,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  if (sendState == ChatMessageSendState.failed) ...[
-                    const Icon(
-                      Icons.error_outline,
-                      size: 14,
-                      color: Colors.red,
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  if (sendState == ChatMessageSendState.sent && isVisitor) ...[
-                    Icon(Icons.done_all, size: 14, color: timeFg),
-                    const SizedBox(width: 4),
-                  ],
-                  Text(
-                    DateFormat.Hm().format(createdAt.toLocal()),
-                    style: TextStyle(fontSize: 11, color: timeFg),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),

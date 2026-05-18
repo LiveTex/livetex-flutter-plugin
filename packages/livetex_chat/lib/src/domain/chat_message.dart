@@ -12,6 +12,8 @@ final class ChatMessage {
     this.fileName,
     this.fileUrl,
     this.creatorLabel,
+    this.creatorType,
+    this.avatarUrl,
     this.keyboard,
     this.sendState = ChatMessageSendState.none,
     this.correlationId,
@@ -24,6 +26,16 @@ final class ChatMessage {
   final String? fileName;
   final String? fileUrl;
   final String? creatorLabel;
+
+  /// Raw `creator.type` from Visitor-API: "visitor" | "employee" | "bot" |
+  /// "system". Use this for behavior decisions (e.g. system messages render
+  /// without a bubble) instead of matching the localized [creatorLabel].
+  final String? creatorType;
+
+  /// Operator avatar URL from `creator.employee.avatarUrl`. Empty for bot
+  /// and visitor messages; UI falls back to a generic icon when null.
+  final String? avatarUrl;
+
   final KeyboardPayload? keyboard;
   final ChatMessageSendState sendState;
   final String? correlationId;
@@ -36,6 +48,8 @@ final class ChatMessage {
     String? fileName,
     String? fileUrl,
     String? creatorLabel,
+    String? creatorType,
+    String? avatarUrl,
     KeyboardPayload? keyboard,
     ChatMessageSendState? sendState,
     String? correlationId,
@@ -48,6 +62,8 @@ final class ChatMessage {
       fileName: fileName ?? this.fileName,
       fileUrl: fileUrl ?? this.fileUrl,
       creatorLabel: creatorLabel ?? this.creatorLabel,
+      creatorType: creatorType ?? this.creatorType,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
       keyboard: keyboard ?? this.keyboard,
       sendState: sendState ?? this.sendState,
       correlationId: correlationId ?? this.correlationId,
