@@ -60,12 +60,24 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   VisitorDialogState? _dialog;
   LivetexConnectionState _conn = LivetexConnectionState.disconnected;
 
-  /// Last seen `rate` payload — kept so the top panel survives an update
-  /// where the server omits `rate` (notably the first `dialogState` after a
-  /// WebSocket reconnect). Mirrors native `ChatViewModel.pendingRatingPanelState`
-  /// + the `updateDialogState` fallback in `ChatActivity` (see audit notes).
-  /// Top panel itself is shown only while the dialog is NOT unassigned, so
-  /// this never overlaps with the bottom rating card.
+  /// Last `rate` payload seen while the dialog was assigned to an operator
+  /// (i.e. status != unassigned). Set once and refreshed thereafter — never
+  /// cleared during the lifetime of the screen. Mirrors native
+  /// `ChatViewModel.pendingRatingPanelState` + the `ChatActivity` fallback at
+  /// `updateDialogState:795-803`: even after the operator closes the dialog
+  /// or after a WebSocket reconnect strips `rate` from the next `dialogState`,
+  /// the top panel keeps showing this cached payload.
+  ///
+  /// We also use the *presence* of this field to distinguish the two backend
+  /// rating configurations:
+  /// - "сквозная" (whole-dialog) → server sends `rate` while assigned, so
+  ///   `_stickyTopRate` gets set and the bottom card is suppressed.
+  /// - "финальная" (after-dialog) → server only sends `rate` once the dialog
+  ///   becomes unassigned, so `_stickyTopRate` stays null and we show the
+  ///   bottom card.
+  ///
+  /// Reset only by destroying the screen (force-quit), which matches native
+  /// "плашка пропадает только после force-quit".
   DialogRateState? _stickyTopRate;
 
   bool _typingVisible = false;
@@ -119,13 +131,19 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         if (!mounted) return;
         setState(() {
           _dialog = d;
-          // Refresh sticky top rate whenever the server actually sends one.
-          // Status doesn't gate the write — even an unassigned state with a
-          // submitted result is worth keeping, so a later re-open shows the
-          // correct value. Visibility is gated separately in build().
+          // Set sticky top only when rate first arrives during an assigned
+          // dialog — that's the signal that the admin configured "сквозная"
+          // (whole-dialog) rating. Once set, keep refreshing it on every
+          // subsequent state so the panel reflects the latest `isSet` value
+          // even after the operator closes the dialog. Rate that arrives
+          // for the first time during `unassigned` means "финальная"
+          // (after-dialog) and stays out of sticky → bottom card path.
           final r = d?.rate;
           if (r != null && (r.enabledType?.isNotEmpty ?? false)) {
-            _stickyTopRate = r;
+            if (_stickyTopRate != null ||
+                d!.status != DialogStatus.unassigned) {
+              _stickyTopRate = r;
+            }
           }
           // Drop department picker if the dialog moved to an assigned state
           // before the user picked — server routed it for us.
@@ -329,22 +347,20 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   Widget _buildScaffold(LivetexChatTheme theme) {
     final d = _dialog;
-    // Top vs bottom rating are mutually exclusive in our UI: while the
-    // dialog is active (status != unassigned) the top panel is shown; once
-    // the operator closes the dialog (unassigned) it switches to the
-    // bottom rating card. Mirroring `ChatActivity.updateDialogState:795-803`
-    // we fall back to the last seen rate so the top panel survives a
-    // `dialogState` update that omits `rate` (e.g. the first one after a
-    // WebSocket reconnect).
+    // Two backend configurations, no overlap on screen:
+    //   1. "сквозная" → `_stickyTopRate` is set (rate seen at least once
+    //      during an assigned dialog) → render the top panel and never the
+    //      bottom card, even after the dialog goes unassigned and even
+    //      after a reconnect that drops `rate` from the next state.
+    //   2. "финальная" → sticky stays null, rate only appears when the
+    //      dialog is unassigned → render the bottom card.
     final stateRate = d?.rate;
     final hasStateRate =
         stateRate != null && (stateRate.enabledType?.isNotEmpty ?? false);
     final isUnassigned = d?.status == DialogStatus.unassigned;
-    final topRate = stateRate ?? _stickyTopRate;
-    final hasTopRate =
-        topRate != null && (topRate.enabledType?.isNotEmpty ?? false);
-    final showTopRating = hasTopRate && !isUnassigned;
-    final showBottomRating = hasStateRate && isUnassigned;
+    final topRate = _stickyTopRate;
+    final showTopRating = topRate != null;
+    final showBottomRating = !showTopRating && hasStateRate && isUnassigned;
     return Scaffold(
       backgroundColor: theme.background,
       appBar: AppBar(
