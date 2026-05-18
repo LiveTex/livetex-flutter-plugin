@@ -340,7 +340,10 @@ final class LivetexChat {
 
   void sendText(String text) {
     final s = _session;
-    if (s == null) return;
+    if (s == null) {
+      _emitTrace("sendText SKIPPED (no session) text=${text.length}ch");
+      return;
+    }
     final corr = _nextCorrelation("txt");
     final pending = ChatMessage(
       id: "pending:$corr",
@@ -353,7 +356,9 @@ final class LivetexChat {
     _byId[pending.id] = pending;
     _insertSortedId(pending.id);
     _emitMessages();
-    s.sendRawJson(VisitorOutgoing.text(correlationId: corr, content: text));
+    final json = VisitorOutgoing.text(correlationId: corr, content: text);
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void sendTyping() {
@@ -457,9 +462,14 @@ final class LivetexChat {
   }
 
   void selectDepartment({required String correlationId, required String id}) {
-    _session?.sendRawJson(
-      VisitorOutgoing.department(correlationId: correlationId, id: id),
-    );
+    final s = _session;
+    if (s == null) {
+      _emitTrace("selectDepartment SKIPPED (no session) id=$id");
+      return;
+    }
+    final json = VisitorOutgoing.department(correlationId: correlationId, id: id);
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void loadHistory({required String messageId, int offset = 0}) {

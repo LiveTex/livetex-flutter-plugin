@@ -144,19 +144,36 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         if (!mounted) return;
         setState(() {
           _dialog = d;
-          // Lock the rating mode on the very first rate payload. After that
-          // routine status transitions (operator closing/reopening the
-          // dialog) cannot flip a "финальная" config into a top panel or
-          // vice versa. The top panel keeps a cached `_stickyTopRate` so it
-          // survives a reconnect that omits `rate`; bottom is rebuilt from
-          // the current state each time.
+          // Merge incoming rate with the cached one. The server can send
+          // partial state-updates — verified on device: after a successful
+          // sendRating in a closed dialog the next state has rate that only
+          // carries `isSet` and drops `enabledType`/`textBefore`/etc. A
+          // straight replace would lose `enabledType` (the panel can no
+          // longer tell five-point vs double-point) and the confirmation
+          // would never reach TopRatingPanel.didUpdateWidget — the
+          // spinner stays on until our 10s safety-net fires.
           final r = d?.rate;
-          if (r != null && (r.enabledType?.isNotEmpty ?? false)) {
-            _ratingMode ??= d!.status == DialogStatus.unassigned
-                ? _RatingMode.bottomCard
-                : _RatingMode.topSticky;
+          if (r != null) {
+            final cached = _stickyTopRate;
+            final merged = DialogRateState(
+              enabledType: (r.enabledType?.isNotEmpty ?? false)
+                  ? r.enabledType
+                  : cached?.enabledType,
+              commentEnabled: r.commentEnabled ?? cached?.commentEnabled,
+              textBefore: r.textBefore ?? cached?.textBefore,
+              textAfter: r.textAfter ?? cached?.textAfter,
+              isSet: r.isSet ?? cached?.isSet,
+            );
+            // Mode is locked once, on the first rate that has enabledType.
+            // Routine status transitions (close/reopen) cannot flip a
+            // "финальная" config into "сквозная" or vice versa.
+            if (merged.enabledType?.isNotEmpty ?? false) {
+              _ratingMode ??= d!.status == DialogStatus.unassigned
+                  ? _RatingMode.bottomCard
+                  : _RatingMode.topSticky;
+            }
             if (_ratingMode == _RatingMode.topSticky) {
-              _stickyTopRate = r;
+              _stickyTopRate = merged;
             }
           }
           // Drop the department picker only when an operator is actually
