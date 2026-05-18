@@ -24,10 +24,20 @@ class TopRatingPanel extends StatefulWidget {
   const TopRatingPanel({
     super.key,
     required this.rate,
+    required this.expanded,
+    required this.onExpandedChanged,
     required this.onSubmit,
   });
 
   final DialogRateState rate;
+
+  /// Expand/collapse is controlled from the host so an outside tap (on the
+  /// message list) can collapse the panel — mirrors native
+  /// `ChatActivity:339-349` (`messagesView.setOnTouchListener` →
+  /// `feedbackContainerView.callOnClick()`).
+  final bool expanded;
+  final ValueChanged<bool> onExpandedChanged;
+
   final void Function(String value) onSubmit;
 
   @override
@@ -37,7 +47,6 @@ class TopRatingPanel extends StatefulWidget {
 class _TopRatingPanelState extends State<TopRatingPanel> {
   /// -1 = no pick (Initial); 1..5 (fivePoint) / 0|1 (doublePoint) otherwise.
   int _picked = -1;
-  bool _expanded = false;
   bool _submitting = false;
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
@@ -55,7 +64,12 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     if (wasSet != nowSet && nowSet != null && _submitting) {
       _submitTimeout?.cancel();
       _submitting = false;
-      _expanded = false;
+      _picked = -1;
+      widget.onExpandedChanged(false);
+    }
+    // Reset selection on outside-tap collapse so the next expand starts
+    // clean (matches §4.3 — re-expand resets the picked value).
+    if (oldWidget.expanded && !widget.expanded && !_submitting) {
       _picked = -1;
     }
     // enabledType changed — reset selection per §4.4.
@@ -105,11 +119,19 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
-    return Material(
-      color: theme.ratingPanelBackground,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: _expanded ? _buildExpanded(theme) : _buildCollapsed(theme),
+    // SizedBox + double.infinity makes the Material span the full screen
+    // width inside the parent Column — otherwise the panel shrinks to its
+    // intrinsic content size and leaves bare white strips on either side.
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: theme.ratingPanelBackground,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: widget.expanded
+              ? _buildExpanded(theme)
+              : _buildCollapsed(theme),
+        ),
       ),
     );
   }
@@ -117,10 +139,10 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   Widget _buildCollapsed(LivetexChatTheme theme) {
     final shown = _isSetValue();
     return InkWell(
-      onTap: () => setState(() {
-        _expanded = true;
-        _picked = -1; // reset selection on re-expand per §4.3
-      }),
+      onTap: () {
+        setState(() => _picked = -1); // reset selection on re-expand per §4.3
+        widget.onExpandedChanged(true);
+      },
       child: Row(
         children: [
           const Expanded(

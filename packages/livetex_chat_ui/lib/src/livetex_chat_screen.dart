@@ -86,6 +86,12 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   /// the screen is destroyed (force-quit).
   DialogRateState? _stickyTopRate;
 
+  /// Top panel expand/collapse — lifted to the screen so a tap anywhere in
+  /// the message list collapses an open panel, matching native
+  /// `ChatActivity:339-349` (`messagesView.setOnTouchListener` →
+  /// `feedbackContainerView.callOnClick()`).
+  bool _topRatingExpanded = false;
+
   bool _typingVisible = false;
   Timer? _typingTimer;
   DateTime? _lastTypingSent;
@@ -395,28 +401,41 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
             TopRatingPanel(
               key: ValueKey("top-${topRate.enabledType}"),
               rate: topRate,
+              expanded: _topRatingExpanded,
+              onExpandedChanged: (v) =>
+                  setState(() => _topRatingExpanded = v),
               onSubmit: (value) => _chat.sendRating(
                 rateType: topRate.enabledType!,
                 value: value,
               ),
             ),
           Expanded(
-            child: _MessageList(
-              messages: _messages,
-              scroll: _scroll,
-              typingVisible: _typingVisible,
-              operatorName: d?.employee?.name,
-              onPressBotButton: _onPressBotButton,
-              bottomRating: showBottomRating
-                  ? _BottomRatingDescriptor(
-                      rate: stateRate,
-                      onSubmit: (value, comment) => _chat.sendRating(
-                        rateType: stateRate.enabledType!,
-                        value: value,
-                        comment: comment,
-                      ),
-                    )
+            child: GestureDetector(
+              // Tap on the message list collapses an open top rating panel,
+              // mirroring native ChatActivity:339-349. `translucent` so
+              // taps on actual children (messages, bot keyboard) still
+              // reach them.
+              behavior: HitTestBehavior.translucent,
+              onTap: _topRatingExpanded
+                  ? () => setState(() => _topRatingExpanded = false)
                   : null,
+              child: _MessageList(
+                messages: _messages,
+                scroll: _scroll,
+                typingVisible: _typingVisible,
+                operatorName: d?.employee?.name,
+                onPressBotButton: _onPressBotButton,
+                bottomRating: showBottomRating
+                    ? _BottomRatingDescriptor(
+                        rate: stateRate,
+                        onSubmit: (value, comment) => _chat.sendRating(
+                          rateType: stateRate.enabledType!,
+                          value: value,
+                          comment: comment,
+                        ),
+                      )
+                    : null,
+              ),
             ),
           ),
           _buildBottomArea(theme, d),
