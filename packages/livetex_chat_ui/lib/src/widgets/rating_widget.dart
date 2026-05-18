@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:developer" as developer;
 
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
@@ -93,6 +94,10 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   }
 
   void _submit() {
+    developer.log(
+      "[top] _submit canSubmit=$_canSubmit submitting=$_submitting picked=$_picked",
+      name: "livetex_ui",
+    );
     if (!_canSubmit) return;
     setState(() => _submitting = true);
     widget.onSubmit(_picked.toString());
