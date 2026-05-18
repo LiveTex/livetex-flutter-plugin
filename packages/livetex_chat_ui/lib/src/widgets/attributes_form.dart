@@ -55,24 +55,40 @@ class _AttributesFormState extends State<AttributesForm> {
               color: Colors.white,
               elevation: 10,
               shadowColor: Colors.black26,
+              // Material 3 tints elevated surfaces with the seed color,
+              // which on a white card-on-white-background washes the
+              // drop shadow out. Disable the tint so the shadow stays
+              // visible — mirrors Android's cardElevation behavior.
+              surfaceTintColor: Colors.transparent,
               borderRadius: BorderRadius.circular(theme.cardRadius),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _AttrField(controller: _name, hint: "Имя"),
-                  const Divider(height: 1, color: Color(0xFFE5E5E5)),
-                  _AttrField(
-                    controller: _phone,
-                    hint: "Телефон",
-                    keyboardType: TextInputType.phone,
-                  ),
-                  const Divider(height: 1, color: Color(0xFFE5E5E5)),
-                  _AttrField(
-                    controller: _email,
-                    hint: "E-mail",
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                ],
+              child: DecoratedBox(
+                // Flutter elevation drops shadow downward only — the top
+                // edge of a white card on a white Scaffold has nothing to
+                // separate it from the background. A 1px hairline border
+                // (same #E5E5E5 used between fields and on the composer)
+                // gives the card a visible outline on all four sides.
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(theme.cardRadius),
+                  border: Border.all(color: const Color(0xFFE5E5E5)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _AttrField(controller: _name, hint: "Имя"),
+                    const Divider(height: 1, color: Color(0xFFE5E5E5)),
+                    _AttrField(
+                      controller: _phone,
+                      hint: "Телефон",
+                      keyboardType: TextInputType.phone,
+                    ),
+                    const Divider(height: 1, color: Color(0xFFE5E5E5)),
+                    _AttrField(
+                      controller: _email,
+                      hint: "E-mail",
+                      keyboardType: TextInputType.emailAddress,
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 8),
