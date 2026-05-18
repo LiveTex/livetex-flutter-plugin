@@ -158,10 +158,12 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               _stickyTopRate = r;
             }
           }
-          // Drop department picker if the dialog moved to an assigned state
-          // before the user picked — server routed it for us.
-          if (d != null &&
-              d.status != DialogStatus.unassigned &&
+          // Drop the department picker only when an operator is actually
+          // attached (`assigned`) — that's the case the server routed for
+          // us. `aiBot` is still a valid moment to show the picker (the
+          // bot is asking which queue to hand over to), so don't yank it
+          // away just because the status moved off `unassigned`.
+          if (d?.status == DialogStatus.assigned &&
               _bottomQueue.contains(_PendingBottom.departments)) {
             _bottomQueue.remove(_PendingBottom.departments);
           }
@@ -189,13 +191,14 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
       _chat.departmentRequest.listen((deps) {
         if (!mounted) return;
         if (deps.isEmpty) return;
-        // After reconnect the server may resend the original
-        // departmentRequest even though we already routed the dialog (e.g.
-        // operator assigned via admin panel while we were offline). Showing
-        // a picker for a dialog that already has an operator just confuses
-        // the user — ignore.
-        if (_dialog != null &&
-            _dialog!.status != DialogStatus.unassigned) {
+        // Only ignore if an operator is already attached to the dialog
+        // (`assigned`) — that covers the post-reconnect dup-request case
+        // where the dialog was routed via the admin panel while we were
+        // offline. Other states (`aiBot`, `inQueue`, `unassigned`) are
+        // legitimate moments for the picker: a bot offering to hand the
+        // chat over to a human is the most common one, and gating that
+        // out hides the picker entirely.
+        if (_dialog?.status == DialogStatus.assigned) {
           return;
         }
         if (deps.length == 1) {
