@@ -19,6 +19,9 @@ import "widgets/rating_widget.dart";
 /// (attributes / departments forms replace the composer one at a time).
 enum _PendingBottom { attributes, departments }
 
+/// Detected once per screen lifetime — see `_ratingMode` doc.
+enum _RatingMode { topSticky, bottomCard }
+
 /// Drop-in full-screen chat. Defaults to [LivetexChatTheme.livetex] (native
 /// Android `demo-lib` look). Pass [theme] to override.
 class LivetexChatScreen extends StatefulWidget {
@@ -60,24 +63,27 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   VisitorDialogState? _dialog;
   LivetexConnectionState _conn = LivetexConnectionState.disconnected;
 
-  /// Last `rate` payload seen while the dialog was assigned to an operator
-  /// (i.e. status != unassigned). Set once and refreshed thereafter — never
-  /// cleared during the lifetime of the screen. Mirrors native
-  /// `ChatViewModel.pendingRatingPanelState` + the `ChatActivity` fallback at
-  /// `updateDialogState:795-803`: even after the operator closes the dialog
-  /// or after a WebSocket reconnect strips `rate` from the next `dialogState`,
-  /// the top panel keeps showing this cached payload.
-  ///
-  /// We also use the *presence* of this field to distinguish the two backend
-  /// rating configurations:
-  /// - "сквозная" (whole-dialog) → server sends `rate` while assigned, so
-  ///   `_stickyTopRate` gets set and the bottom card is suppressed.
-  /// - "финальная" (after-dialog) → server only sends `rate` once the dialog
-  ///   becomes unassigned, so `_stickyTopRate` stays null and we show the
-  ///   bottom card.
-  ///
-  /// Reset only by destroying the screen (force-quit), which matches native
-  /// "плашка пропадает только после force-quit".
+  /// Mode picked once, on the first `rate` payload of the session, and kept
+  /// for the rest of the screen lifetime:
+  /// - `topSticky`  — first rate arrived while the dialog was assigned
+  ///   (admin configured "сквозная"). Show top panel forever; never bottom.
+  /// - `bottomCard` — first rate arrived while the dialog was already
+  ///   unassigned (admin configured "финальная"). Show bottom card per
+  ///   current state; never top. Bottom is not sticky — if the state stops
+  ///   carrying a rate, the card disappears, mirroring native
+  ///   `ChatViewModel.onDialogStateUpdate:559-562`.
+  /// Locked once chosen so a routine operator action (e.g. reopening the
+  /// closed dialog) cannot accidentally flip a "финальная" configuration
+  /// into a top panel.
+  _RatingMode? _ratingMode;
+
+  /// Latest rate payload — refreshed on every state that carries one. Used
+  /// only when `_ratingMode == _RatingMode.topSticky` to drive the top
+  /// panel. Mirrors native `pendingRatingPanelState` + `ChatActivity`
+  /// fallback at `updateDialogState:795-803`: even after operator closes
+  /// the dialog or a WebSocket reconnect strips `rate` from the next
+  /// `dialogState`, the top panel keeps showing this cached payload until
+  /// the screen is destroyed (force-quit).
   DialogRateState? _stickyTopRate;
 
   bool _typingVisible = false;
@@ -131,17 +137,18 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         if (!mounted) return;
         setState(() {
           _dialog = d;
-          // Set sticky top only when rate first arrives during an assigned
-          // dialog — that's the signal that the admin configured "сквозная"
-          // (whole-dialog) rating. Once set, keep refreshing it on every
-          // subsequent state so the panel reflects the latest `isSet` value
-          // even after the operator closes the dialog. Rate that arrives
-          // for the first time during `unassigned` means "финальная"
-          // (after-dialog) and stays out of sticky → bottom card path.
+          // Lock the rating mode on the very first rate payload. After that
+          // routine status transitions (operator closing/reopening the
+          // dialog) cannot flip a "финальная" config into a top panel or
+          // vice versa. The top panel keeps a cached `_stickyTopRate` so it
+          // survives a reconnect that omits `rate`; bottom is rebuilt from
+          // the current state each time.
           final r = d?.rate;
           if (r != null && (r.enabledType?.isNotEmpty ?? false)) {
-            if (_stickyTopRate != null ||
-                d!.status != DialogStatus.unassigned) {
+            _ratingMode ??= d!.status == DialogStatus.unassigned
+                ? _RatingMode.bottomCard
+                : _RatingMode.topSticky;
+            if (_ratingMode == _RatingMode.topSticky) {
               _stickyTopRate = r;
             }
           }
@@ -347,20 +354,21 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   Widget _buildScaffold(LivetexChatTheme theme) {
     final d = _dialog;
-    // Two backend configurations, no overlap on screen:
-    //   1. "сквозная" → `_stickyTopRate` is set (rate seen at least once
-    //      during an assigned dialog) → render the top panel and never the
-    //      bottom card, even after the dialog goes unassigned and even
-    //      after a reconnect that drops `rate` from the next state.
-    //   2. "финальная" → sticky stays null, rate only appears when the
-    //      dialog is unassigned → render the bottom card.
+    // `_ratingMode` is locked on the first rate payload — see its doc.
+    //   topSticky  → top panel for the rest of the session (sticky cache).
+    //   bottomCard → bottom card driven by current state; not sticky, so
+    //                disappears if the operator reopens the dialog or the
+    //                server stops sending rate (mirrors native).
     final stateRate = d?.rate;
     final hasStateRate =
         stateRate != null && (stateRate.enabledType?.isNotEmpty ?? false);
     final isUnassigned = d?.status == DialogStatus.unassigned;
     final topRate = _stickyTopRate;
-    final showTopRating = topRate != null;
-    final showBottomRating = !showTopRating && hasStateRate && isUnassigned;
+    final showTopRating =
+        _ratingMode == _RatingMode.topSticky && topRate != null;
+    final showBottomRating = _ratingMode == _RatingMode.bottomCard &&
+        hasStateRate &&
+        isUnassigned;
     return Scaffold(
       backgroundColor: theme.background,
       appBar: AppBar(
