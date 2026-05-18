@@ -1,5 +1,4 @@
 import "dart:async";
-import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
@@ -47,7 +46,8 @@ class LivetexChatScreen extends StatefulWidget {
   State<LivetexChatScreen> createState() => _LivetexChatScreenState();
 }
 
-class _LivetexChatScreenState extends State<LivetexChatScreen> {
+class _LivetexChatScreenState extends State<LivetexChatScreen>
+    with WidgetsBindingObserver {
   late LivetexChat _chat;
   bool _ownChat = false;
 
@@ -108,11 +108,25 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
     _chat = widget.chat ?? LivetexChat(widget.config);
     _ownChat = widget.chat == null;
     _scroll.addListener(_onScroll);
+    WidgetsBinding.instance.addObserver(this);
     _wire();
     if (widget.autoconnect) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_chat.connect());
       });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Auto-reconnect on app resume: if the app was backgrounded the OS
+    // tends to suspend the WebSocket (Android Doze / iOS app-suspend) and
+    // we come back to a dead socket without the user touching anything.
+    // Don't make them tap "Повторить" themselves. Matches native iOS-SDK
+    // behavior: `background → disconnect, foreground → connect`.
+    if (state == AppLifecycleState.resumed &&
+        _conn != LivetexConnectionState.connected) {
+      unawaited(_chat.connect());
     }
   }
 
@@ -253,6 +267,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     for (final s in _subs) {
       unawaited(s.cancel());
     }
@@ -425,21 +440,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               expanded: _topRatingExpanded,
               onExpandedChanged: (v) =>
                   setState(() => _topRatingExpanded = v),
-              onSubmit: (value) {
-                developer.log(
-                  "[ui] TOP onSubmit value=$value "
-                  "conn=$_conn "
-                  "stickyType=${_stickyTopRate?.enabledType} "
-                  "stateStatus=${_dialog?.status} "
-                  "stateRate.enabledType=${_dialog?.rate?.enabledType} "
-                  "stateRate.isSet=${_dialog?.rate?.isSet?.value}",
-                  name: "livetex_ui",
-                );
-                _chat.sendRating(
-                  rateType: topRate.enabledType!,
-                  value: value,
-                );
-              },
+              onSubmit: (value) => _chat.sendRating(
+                rateType: topRate.enabledType!,
+                value: value,
+              ),
             ),
           Expanded(
             child: GestureDetector(
