@@ -15,6 +15,21 @@ const _imageExts = <String>{
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif",
 };
 
+/// Quote-reply format from Visitor-API: `"> <quoted line>\n<reply text>"`.
+/// Same as native sdk-android `ChatItem.findQuotedText`.
+class _QuoteParts {
+  const _QuoteParts(this.quote, this.body);
+  final String quote;
+  final String body;
+}
+
+_QuoteParts? _splitQuote(String? content) {
+  if (content == null || !content.startsWith("> ")) return null;
+  final nl = content.indexOf("\n");
+  if (nl <= 2) return null;
+  return _QuoteParts(content.substring(2, nl), content.substring(nl + 1));
+}
+
 bool _isImageUrl(String? u) {
   if (u == null || u.isEmpty) return false;
   final low = u.toLowerCase();
@@ -103,6 +118,60 @@ class MessageTile extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Renders message text; if it starts with a "> quoted line\n" prefix,
+/// renders the quoted line as an inline quote block (vertical accent bar
+/// + dimmed text) above the actual message body. Same content shape as
+/// native sdk-android `ChatItem.findQuotedText`.
+class _TextWithOptionalQuote extends StatelessWidget {
+  const _TextWithOptionalQuote({required this.text, required this.fg});
+
+  final String text;
+  final Color fg;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = LivetexChatTheme.of(context);
+    final parts = _splitQuote(text);
+    if (parts == null) {
+      return SelectableText(text, style: TextStyle(fontSize: 16, color: fg));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 2, color: theme.quoteAccent),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  parts.quote,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: fg.withValues(alpha: 0.75),
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (parts.body.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          SelectableText(
+            parts.body,
+            style: TextStyle(fontSize: 16, color: fg),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -286,10 +355,7 @@ class _MessageBubble extends StatelessWidget {
                 ),
               )
             else if (text != null && text!.isNotEmpty)
-              SelectableText(
-                text!,
-                style: TextStyle(fontSize: 16, color: fg),
-              ),
+              _TextWithOptionalQuote(text: text!, fg: fg),
           ],
         ),
       ),
