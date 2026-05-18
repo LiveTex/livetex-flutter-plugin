@@ -157,18 +157,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
             if (_ratingMode == _RatingMode.topSticky) {
               _stickyTopRate = r;
             }
-          } else if (d != null &&
-              d.status == DialogStatus.unassigned &&
-              d.rate == null) {
-            // Server signal: dialog is closed AND rate option is disabled.
-            // After this point the backend silently drops any incoming
-            // `rating` frame (verified on device — no `result` response,
-            // safety-net 10s timer fires "Не удалось подтвердить"). Without
-            // dropping sticky the user sees a clickable panel that can't
-            // actually submit. The two-field combination (`status=unassigned`
-            // AND `rate=null`) is specific to a real close — a reconnect
-            // race that strips `rate` keeps a non-unassigned status.
-            _stickyTopRate = null;
           }
           // Drop the department picker only when an operator is actually
           // attached (`assigned`) — that's the case the server routed for
