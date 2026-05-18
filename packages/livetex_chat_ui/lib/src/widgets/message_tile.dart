@@ -47,8 +47,7 @@ class MessageTile extends StatelessWidget {
         children: [
           if (!isVisitor &&
               message.creatorLabel != null &&
-              message.creatorLabel!.isNotEmpty &&
-              message.creatorLabel != "Вы")
+              message.creatorLabel!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 48, bottom: 2),
               child: Text(

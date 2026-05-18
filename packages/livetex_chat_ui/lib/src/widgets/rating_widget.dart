@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 
@@ -41,20 +43,33 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
   bool get _isDoublePoint => widget.rate.enabledType == "doublePoint";
 
+  Timer? _submitTimeout;
+
   @override
   void didUpdateWidget(covariant TopRatingPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // Server confirmed submission — auto-collapse per §4.2 step 4.
-    if (widget.rate.isSet != null && _submitting) {
+    // Server confirmed submission — fire only on the actual transition, not
+    // on any unrelated parent rebuild while `_submitting` is still true.
+    final wasSet = oldWidget.rate.isSet?.value;
+    final nowSet = widget.rate.isSet?.value;
+    if (wasSet != nowSet && nowSet != null && _submitting) {
+      _submitTimeout?.cancel();
       _submitting = false;
       _expanded = false;
       _picked = -1;
     }
     // enabledType changed — reset selection per §4.4.
     if (oldWidget.rate.enabledType != widget.rate.enabledType) {
+      _submitTimeout?.cancel();
       _picked = -1;
       _submitting = false;
     }
+  }
+
+  @override
+  void dispose() {
+    _submitTimeout?.cancel();
+    super.dispose();
   }
 
   bool get _canSubmit {
@@ -67,6 +82,18 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     if (!_canSubmit) return;
     setState(() => _submitting = true);
     widget.onSubmit(_picked.toString());
+    _submitTimeout?.cancel();
+    // Safety net: if the server never confirms, unblock the UI so the user
+    // can retry. The actual submission may still have succeeded on the wire.
+    _submitTimeout = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_submitting) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text("Не удалось подтвердить оценку. Попробуйте ещё раз."),
+        ),
+      );
+    });
   }
 
   int _isSetValue() {
@@ -174,6 +201,7 @@ class BottomRatingForm extends StatefulWidget {
 class _BottomRatingFormState extends State<BottomRatingForm> {
   int _picked = -1;
   bool _submitting = false;
+  Timer? _submitTimeout;
   final TextEditingController _comment = TextEditingController();
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
@@ -190,18 +218,22 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     super.didUpdateWidget(oldWidget);
     // enabledType changed in-place — reset per §3.6.
     if (oldWidget.rate.enabledType != widget.rate.enabledType) {
+      _submitTimeout?.cancel();
       _picked = -1;
       _submitting = false;
     }
-    // Server confirmed — clear submitting flag (form switches to Submitted by
-    // looking at widget.rate.isSet directly).
-    if (widget.rate.isSet != null && _submitting) {
+    // Server confirmed — fire only on the actual transition.
+    final wasSet = oldWidget.rate.isSet?.value;
+    final nowSet = widget.rate.isSet?.value;
+    if (wasSet != nowSet && nowSet != null && _submitting) {
+      _submitTimeout?.cancel();
       _submitting = false;
     }
   }
 
   @override
   void dispose() {
+    _submitTimeout?.cancel();
     _comment.dispose();
     super.dispose();
   }
@@ -211,6 +243,16 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     final c = _comment.text.trim();
     setState(() => _submitting = true);
     widget.onSubmit(_picked.toString(), c.isEmpty ? null : c);
+    _submitTimeout?.cancel();
+    _submitTimeout = Timer(const Duration(seconds: 10), () {
+      if (!mounted || !_submitting) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text("Не удалось подтвердить оценку. Попробуйте ещё раз."),
+        ),
+      );
+    });
   }
 
   @override

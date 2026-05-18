@@ -90,7 +90,9 @@ class _ComposerState extends State<Composer> {
                   ),
                   child: TextField(
                     controller: widget.controller,
-                    enabled: widget.enabled,
+                    // Field stays editable even when disconnected so the user
+                    // can keep / correct their typed text; only the send icon
+                    // is greyed out (mirrors native ChatActivity DISABLED).
                     minLines: 1,
                     maxLines: 4,
                     maxLength: 2000,

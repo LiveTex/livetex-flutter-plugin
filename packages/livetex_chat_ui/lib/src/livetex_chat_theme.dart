@@ -174,6 +174,13 @@ class LivetexChatTheme {
   static LivetexChatTheme of(BuildContext context) {
     final scope = context
         .dependOnInheritedWidgetOfExactType<_LivetexChatThemeScope>();
+    assert(
+      scope != null,
+      "LivetexChatTheme.of called without a LivetexChatThemeScope ancestor. "
+      "Wrap your widgets in LivetexChatScreen (it inserts the scope "
+      "automatically) or in LivetexChatThemeScope when using building "
+      "blocks like MessageTile / Composer directly.",
+    );
     return scope?.theme ?? LivetexChatTheme.livetex();
   }
 }

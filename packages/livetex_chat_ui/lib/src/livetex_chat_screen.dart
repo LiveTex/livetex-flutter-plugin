@@ -51,6 +51,11 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   final _scroll = ScrollController();
   final _subs = <StreamSubscription<dynamic>>[];
 
+  /// Auto-follow tail only when the user is already at (or near) the bottom.
+  /// Mirrors common chat UX — don't yank the user away from history they're
+  /// reading just because a new message arrived.
+  bool _userAtBottom = true;
+
   List<ChatMessage> _messages = const [];
   VisitorDialogState? _dialog;
   DialogRateState? _lastRate; // Sticky per rate-requirements.md §2.3
@@ -71,12 +76,23 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
     super.initState();
     _chat = widget.chat ?? LivetexChat(widget.config);
     _ownChat = widget.chat == null;
+    _scroll.addListener(_onScroll);
     _wire();
     if (widget.autoconnect) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_chat.connect());
       });
     }
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    // 80px tolerance: treat "just above the bottom" as still-at-bottom, so a
+    // momentary overscroll or a small lift while reading new messages keeps
+    // auto-follow on.
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 80;
+    if (atBottom != _userAtBottom) _userAtBottom = atBottom;
   }
 
   void _wire() {
@@ -158,6 +174,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   }
 
   void _scrollToEnd() {
+    if (!_userAtBottom) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
         _scroll.jumpTo(_scroll.position.maxScrollExtent);
@@ -172,6 +189,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
     }
     _typingTimer?.cancel();
     _textCtrl.dispose();
+    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     if (_ownChat) {
       unawaited(_chat.dispose());
@@ -256,6 +274,33 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
     });
   }
 
+  void _onPressBotButton(ButtonPayload b) {
+    _chat.pressButton(payload: b.payload);
+    final url = b.url;
+    if (url == null || url.isEmpty) return;
+    // Native delays by 300ms so the visual press effect is visible.
+    Future<void>.delayed(const Duration(milliseconds: 300), () async {
+      if (!mounted) return;
+      final ok = await _tryLaunchUrl(url);
+      if (!ok && mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text("Не удалось открыть ссылку: $url")),
+        );
+      }
+    });
+  }
+
+  Future<bool> _tryLaunchUrl(String url) async {
+    try {
+      return await launchUrl(
+        Uri.parse(url),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = widget.theme ?? LivetexChatTheme.livetex();
@@ -311,6 +356,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               scroll: _scroll,
               typingVisible: _typingVisible,
               operatorName: d?.employee?.name,
+              onPressBotButton: _onPressBotButton,
               bottomRating: showBottomRating
                   ? _BottomRatingDescriptor(
                       rate: displayRate,
@@ -372,6 +418,7 @@ class _MessageList extends StatelessWidget {
     required this.scroll,
     required this.typingVisible,
     required this.operatorName,
+    required this.onPressBotButton,
     required this.bottomRating,
   });
 
@@ -379,11 +426,17 @@ class _MessageList extends StatelessWidget {
   final ScrollController scroll;
   final bool typingVisible;
   final String? operatorName;
+  final void Function(ButtonPayload) onPressBotButton;
   final _BottomRatingDescriptor? bottomRating;
 
   @override
   Widget build(BuildContext context) {
-    final items = _buildItems(messages, typingVisible, operatorName, context);
+    final items = _buildItems(
+      messages,
+      typingVisible,
+      operatorName,
+      onPressBotButton,
+    );
     if (bottomRating != null) {
       items.add(
         BottomRatingForm(
@@ -406,7 +459,7 @@ List<Widget> _buildItems(
   List<ChatMessage> messages,
   bool typingVisible,
   String? operatorName,
-  BuildContext context,
+  void Function(ButtonPayload) onPressBotButton,
 ) {
   final out = <Widget>[];
   DateTime? prevDay;
@@ -424,38 +477,11 @@ List<Widget> _buildItems(
     // `i_chat_message_in.xml`).
     final kb = m.keyboard;
     if (!m.isVisitor && kb != null && kb.buttons.isNotEmpty) {
-      out.add(BotKeyboard(
-        keyboard: kb,
-        onPress: (b) {
-          final st = context
-              .findAncestorStateOfType<_LivetexChatScreenState>();
-          st?._chat.pressButton(payload: b.payload);
-          if (b.url != null && b.url!.isNotEmpty) {
-            Future<void>.delayed(
-              const Duration(milliseconds: 300),
-              () {
-                // Best-effort: open URL in external app (kept lightweight here;
-                // a button can be both `payload` and `url`, and native delays
-                // by 300ms for the visual press effect).
-                // ignore: discarded_futures
-                _launchUrl(b.url!);
-              },
-            );
-          }
-        },
-      ));
+      out.add(BotKeyboard(keyboard: kb, onPress: onPressBotButton));
     }
   }
   if (typingVisible) {
     out.add(TypingTile(operatorName: operatorName));
   }
   return out;
-}
-
-Future<void> _launchUrl(String url) async {
-  try {
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-  } catch (_) {
-    // Silently ignore — the bot payload has already been sent.
-  }
 }
