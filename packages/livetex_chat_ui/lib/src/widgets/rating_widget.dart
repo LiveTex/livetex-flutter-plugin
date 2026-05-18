@@ -3,59 +3,178 @@ import "package:livetex_chat/livetex_chat.dart";
 
 import "../livetex_chat_theme.dart";
 
-/// One parameterized widget covering all rating placements/states/types.
+/// Hardcoded title for the top rating panel per `rate-requirements.md` §4.1
+/// (`textBefore` from the server is intentionally ignored for the top panel).
+const _kTopPanelTitle = "Оцените качество обслуживания";
+const _kCommentHint = "Комментарий (не обязательно)";
+const _kSubmitLabel = "ОЦЕНИТЬ";
+const _kCommentMaxLength = 1000;
+
+/// Top rating panel (sticky at the top of the chat).
 ///
-/// State machine:
-///   - If [rate.isSet] is non-null OR the user just submitted a value, render
-///     the **result** view (read-only, shows the chosen value and `textAfter`).
-///   - Else if [initiallyExpanded] is true OR the user tapped to expand,
-///     render the **interactive** view (large stars/thumbs, optional comment,
-///     submit button disabled until a value is picked).
-///   - Else render the **collapsed** view (label + small indicator).
-///
-/// Type is driven by [rate.enabledType] ∈ {`fivePoint`, `doublePoint`}.
-class RatingWidget extends StatefulWidget {
-  const RatingWidget({
+/// Per `rate-requirements.md` §4:
+/// - Hardcoded title "Оцените качество обслуживания". `textBefore` is ignored.
+/// - No comment field. `commentEnabled` is ignored.
+/// - No `textAfter` shown.
+/// - Submitted state auto-collapses with highlighted icons.
+/// - Re-rating is allowed: tap a collapsed panel to re-expand and re-pick.
+class TopRatingPanel extends StatefulWidget {
+  const TopRatingPanel({
     super.key,
     required this.rate,
     required this.onSubmit,
-    required this.background,
-    this.initiallyExpanded = false,
-    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  });
+
+  final DialogRateState rate;
+  final void Function(String value) onSubmit;
+
+  @override
+  State<TopRatingPanel> createState() => _TopRatingPanelState();
+}
+
+class _TopRatingPanelState extends State<TopRatingPanel> {
+  /// -1 = no pick (Initial); 1..5 (fivePoint) / 0|1 (doublePoint) otherwise.
+  int _picked = -1;
+  bool _expanded = false;
+  bool _submitting = false;
+
+  bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
+  bool get _isDoublePoint => widget.rate.enabledType == "doublePoint";
+
+  @override
+  void didUpdateWidget(covariant TopRatingPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Server confirmed submission — auto-collapse per §4.2 step 4.
+    if (widget.rate.isSet != null && _submitting) {
+      _submitting = false;
+      _expanded = false;
+      _picked = -1;
+    }
+    // enabledType changed — reset selection per §4.4.
+    if (oldWidget.rate.enabledType != widget.rate.enabledType) {
+      _picked = -1;
+      _submitting = false;
+    }
+  }
+
+  bool get _canSubmit {
+    if (_isFivePoint) return _picked >= 1;
+    if (_isDoublePoint) return _picked == 0 || _picked == 1;
+    return false;
+  }
+
+  void _submit() {
+    if (!_canSubmit) return;
+    setState(() => _submitting = true);
+    widget.onSubmit(_picked.toString());
+  }
+
+  int _isSetValue() {
+    final raw = widget.rate.isSet?.value;
+    if (raw == null) return -1;
+    return int.tryParse(raw) ?? -1;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = LivetexChatTheme.of(context);
+    return Material(
+      color: theme.ratingPanelBackground,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: _expanded ? _buildExpanded(theme) : _buildCollapsed(theme),
+      ),
+    );
+  }
+
+  Widget _buildCollapsed(LivetexChatTheme theme) {
+    final shown = _isSetValue();
+    return InkWell(
+      onTap: () => setState(() {
+        _expanded = true;
+        _picked = -1; // reset selection on re-expand per §4.3
+      }),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              _kTopPanelTitle,
+              style: TextStyle(fontSize: 12, color: Color(0xFF7E7979)),
+            ),
+          ),
+          if (_isFivePoint)
+            _Stars(value: shown < 0 ? 0 : shown, size: 22, theme: theme)
+          else if (_isDoublePoint)
+            _Thumbs(value: shown < 0 ? -1 : shown, size: 22, theme: theme),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExpanded(LivetexChatTheme theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: Text(
+            _kTopPanelTitle,
+            style: TextStyle(fontSize: 12, color: Color(0xFF7E7979)),
+          ),
+        ),
+        if (_isFivePoint)
+          _Stars(
+            value: _picked,
+            size: 44,
+            theme: theme,
+            onPick: _submitting ? null : (v) => setState(() => _picked = v),
+          )
+        else if (_isDoublePoint)
+          _Thumbs(
+            value: _picked,
+            size: 45,
+            theme: theme,
+            onPick: _submitting
+                ? null
+                : (positive) => setState(() => _picked = positive ? 1 : 0),
+          ),
+        const SizedBox(height: 16),
+        _SubmitButton(
+          enabled: _canSubmit && !_submitting,
+          submitting: _submitting,
+          onPressed: _submit,
+        ),
+      ],
+    );
+  }
+}
+
+/// Bottom rating form rendered as an in-list item after the last message
+/// when the dialog status is `unassigned` (operator closed the dialog).
+///
+/// Per `rate-requirements.md` §3:
+/// - Uses `textBefore` (above), `textAfter` (below the card after Submitted).
+/// - Comment field rendered when `commentEnabled=true`, max 1000 chars.
+/// - Submit button disabled until a value is picked; comment doesn't affect.
+/// - Once Submitted (`isSet` present) the form is locked — no re-rating.
+class BottomRatingForm extends StatefulWidget {
+  const BottomRatingForm({
+    super.key,
+    required this.rate,
+    required this.onSubmit,
   });
 
   final DialogRateState rate;
   final void Function(String value, String? comment) onSubmit;
-  final Color background;
-  final bool initiallyExpanded;
-  final EdgeInsets padding;
 
   @override
-  State<RatingWidget> createState() => _RatingWidgetState();
+  State<BottomRatingForm> createState() => _BottomRatingFormState();
 }
 
-class _RatingWidgetState extends State<RatingWidget> {
-  /// Sentinel `-1` = not picked yet. Otherwise:
-  /// - `fivePoint`: 1..5
-  /// - `doublePoint`: 0 (negative) | 1 (positive)
+class _BottomRatingFormState extends State<BottomRatingForm> {
   int _picked = -1;
-  bool _expanded = false;
-  String? _localComment;
-  bool _localSubmitted = false;
-  late final TextEditingController _commentCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _expanded = widget.initiallyExpanded;
-    _commentCtrl = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    _commentCtrl.dispose();
-    super.dispose();
-  }
+  bool _submitting = false;
+  final TextEditingController _comment = TextEditingController();
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
   bool get _isDoublePoint => widget.rate.enabledType == "doublePoint";
@@ -66,73 +185,80 @@ class _RatingWidgetState extends State<RatingWidget> {
     return false;
   }
 
-  int _intOrZero(String? raw) {
-    if (raw == null) return 0;
-    return int.tryParse(raw) ?? 0;
+  @override
+  void didUpdateWidget(covariant BottomRatingForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // enabledType changed in-place — reset per §3.6.
+    if (oldWidget.rate.enabledType != widget.rate.enabledType) {
+      _picked = -1;
+      _submitting = false;
+    }
+    // Server confirmed — clear submitting flag (form switches to Submitted by
+    // looking at widget.rate.isSet directly).
+    if (widget.rate.isSet != null && _submitting) {
+      _submitting = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _comment.dispose();
+    super.dispose();
   }
 
   void _submit() {
     if (!_canSubmit) return;
-    final value = _picked.toString();
-    final comment = _commentCtrl.text.trim().isEmpty
-        ? null
-        : _commentCtrl.text.trim();
-    setState(() {
-      _localSubmitted = true;
-      _localComment = comment;
-    });
-    widget.onSubmit(value, comment);
+    final c = _comment.text.trim();
+    setState(() => _submitting = true);
+    widget.onSubmit(_picked.toString(), c.isEmpty ? null : c);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
     final isSet = widget.rate.isSet;
-    final showResult = isSet != null || _localSubmitted;
-    final Widget body;
-    if (showResult) {
-      body = _buildResult(theme, isSet);
-    } else if (_expanded) {
-      body = _buildInteractive(theme);
-    } else {
-      body = _buildCollapsed(theme);
-    }
-    return Material(
-      color: widget.background,
-      child: Padding(
-        padding: widget.padding,
-        child: body,
-      ),
-    );
-  }
-
-  Widget _buildCollapsed(LivetexChatTheme theme) {
-    final label = (widget.rate.textBefore?.trim().isNotEmpty ?? false)
-        ? widget.rate.textBefore!.trim()
-        : "Оцените качество обслуживания";
-    return InkWell(
-      onTap: () => setState(() => _expanded = true),
-      child: Row(
+    final isSubmitted = isSet != null;
+    final textBefore = widget.rate.textBefore?.trim() ?? "";
+    final textAfter = widget.rate.textAfter?.trim() ?? "";
+    final commentEnabled = widget.rate.commentEnabled ?? false;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 12, color: theme.systemText),
+          Container(
+            decoration: BoxDecoration(
+              color: theme.ratingFormBackground,
+              borderRadius: BorderRadius.circular(theme.controlRadius),
             ),
+            padding: const EdgeInsets.all(16),
+            child: isSubmitted
+                ? _buildSubmitted(theme, isSet)
+                : _buildEditable(theme, textBefore, commentEnabled),
           ),
-          if (_isFivePoint)
-            _SmallStars(value: 0, theme: theme)
-          else if (_isDoublePoint)
-            _SmallThumbs(value: -1, theme: theme),
+          if (isSubmitted && textAfter.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Center(
+                child: Text(
+                  textAfter,
+                  style: TextStyle(fontSize: 12, color: theme.systemText),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildInteractive(LivetexChatTheme theme) {
-    final textBefore = widget.rate.textBefore?.trim() ?? "";
+  Widget _buildEditable(
+    LivetexChatTheme theme,
+    String textBefore,
+    bool commentEnabled,
+  ) {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         if (textBefore.isNotEmpty)
           Padding(
@@ -143,168 +269,164 @@ class _RatingWidgetState extends State<RatingWidget> {
               textAlign: TextAlign.center,
             ),
           ),
-        Center(
-          child: _isFivePoint
-              ? _LargeStars(
-                  value: _picked,
-                  theme: theme,
-                  onPick: (v) => setState(() => _picked = v),
-                )
-              : _LargeThumbs(
-                  value: _picked,
-                  theme: theme,
-                  onPick: (positive) =>
-                      setState(() => _picked = positive ? 1 : 0),
-                ),
-        ),
-        if (widget.rate.commentEnabled ?? false)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: TextField(
-              controller: _commentCtrl,
-              maxLength: 1000,
-              maxLines: 4,
-              minLines: 2,
-              style: TextStyle(fontSize: 14, color: theme.composerText),
-              decoration: InputDecoration(
-                hintText: "Комментарий (не обязательно)",
-                hintStyle: TextStyle(color: theme.composerHint),
-                counterText: "",
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(theme.controlRadius),
-                  borderSide: BorderSide(color: theme.composerHint),
-                ),
+        if (_isFivePoint)
+          _Stars(
+            value: _picked,
+            size: 44,
+            theme: theme,
+            onPick: _submitting ? null : (v) => setState(() => _picked = v),
+          )
+        else if (_isDoublePoint)
+          _Thumbs(
+            value: _picked,
+            size: 45,
+            theme: theme,
+            onPick: _submitting
+                ? null
+                : (positive) => setState(() => _picked = positive ? 1 : 0),
+          ),
+        if (commentEnabled) ...[
+          const SizedBox(height: 16),
+          TextField(
+            controller: _comment,
+            enabled: !_submitting,
+            maxLength: _kCommentMaxLength,
+            maxLines: 5,
+            minLines: 2,
+            style: TextStyle(fontSize: 14, color: theme.composerText),
+            decoration: InputDecoration(
+              hintText: _kCommentHint,
+              hintStyle: TextStyle(color: theme.composerHint),
+              counterText: "",
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(theme.controlRadius),
+                borderSide: BorderSide(color: theme.composerFieldStroke),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(theme.controlRadius),
+                borderSide: BorderSide(color: theme.composerFieldStroke),
               ),
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: Center(
-            child: SizedBox(
-              height: 36,
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: theme.ratingButton,
-                  foregroundColor: theme.ratingButtonText,
-                  disabledBackgroundColor:
-                      theme.ratingButton.withValues(alpha: 0.08),
-                  disabledForegroundColor:
-                      theme.composerText.withValues(alpha: 0.25),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(theme.controlRadius),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                ),
-                onPressed: _canSubmit ? _submit : null,
-                child: const Text("Оценить", style: TextStyle(fontSize: 14)),
-              ),
-            ),
-          ),
+        ],
+        const SizedBox(height: 16),
+        _SubmitButton(
+          enabled: _canSubmit && !_submitting,
+          submitting: _submitting,
+          onPressed: _submit,
         ),
       ],
     );
   }
 
-  Widget _buildResult(LivetexChatTheme theme, SetRatePayload? isSet) {
-    final serverValue = _intOrZero(isSet?.value);
-    final value = isSet != null
-        ? serverValue
-        : (_isFivePoint ? _picked : (_picked >= 0 ? _picked : 0));
-    final comment = isSet?.comment ?? _localComment;
-    final textAfter = widget.rate.textAfter?.trim();
+  Widget _buildSubmitted(LivetexChatTheme theme, SetRatePayload isSet) {
+    final value = int.tryParse(isSet.value) ?? 0;
+    final comment = isSet.comment?.trim();
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Center(
-          child: _isFivePoint
-              ? _SmallStars(value: value, theme: theme)
-              : _SmallThumbs(value: value, theme: theme),
-        ),
-        if (comment != null && comment.trim().isNotEmpty)
+        if (_isFivePoint)
+          _Stars(value: value, size: 22, theme: theme)
+        else if (_isDoublePoint)
+          _Thumbs(value: value, size: 22, theme: theme),
+        if (comment != null && comment.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 16),
             child: Text(
-              comment.trim(),
+              comment,
               style: TextStyle(fontSize: 14, color: theme.incomingText),
               textAlign: TextAlign.center,
             ),
           ),
-        if (textAfter != null && textAfter.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: Text(
-              textAfter,
-              style: TextStyle(fontSize: 12, color: theme.systemText),
-              textAlign: TextAlign.center,
-            ),
-          ),
       ],
     );
   }
 }
 
-class _SmallStars extends StatelessWidget {
-  const _SmallStars({required this.value, required this.theme});
-
-  final int value;
-  final LivetexChatTheme theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < 5; i++)
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Icon(
-              i < value ? Icons.star_rounded : Icons.star_outline_rounded,
-              size: 22,
-              color: i < value
-                  ? theme.ratingStarActive
-                  : theme.systemText.withValues(alpha: 0.6),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _LargeStars extends StatelessWidget {
-  const _LargeStars({
-    required this.value,
-    required this.theme,
-    required this.onPick,
+class _SubmitButton extends StatelessWidget {
+  const _SubmitButton({
+    required this.enabled,
+    required this.submitting,
+    required this.onPressed,
   });
 
-  final int value;
-  final LivetexChatTheme theme;
-  final ValueChanged<int> onPick;
+  final bool enabled;
+  final bool submitting;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
+    final theme = LivetexChatTheme.of(context);
+    return SizedBox(
+      height: 36,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          backgroundColor:
+              enabled ? theme.ratingButton : theme.ratingButtonDisabledBg,
+          foregroundColor:
+              enabled ? theme.ratingButtonText : theme.ratingButtonDisabledText,
+          disabledForegroundColor: theme.ratingButtonDisabledText,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(theme.controlRadius),
+          ),
+          side: BorderSide(
+            color: enabled
+                ? theme.ratingButtonStroke
+                : theme.ratingButtonStrokeDisabled,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+        ),
+        onPressed: enabled ? onPressed : null,
+        child: submitting
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+            : const Text(_kSubmitLabel, style: TextStyle(fontSize: 14)),
+      ),
+    );
+  }
+}
+
+class _Stars extends StatelessWidget {
+  const _Stars({
+    required this.value,
+    required this.size,
+    required this.theme,
+    this.onPick,
+  });
+
+  /// 0..5 — number of filled stars.
+  final int value;
+  final double size;
+  final LivetexChatTheme theme;
+  final ValueChanged<int>? onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    final inactive = theme.systemText.withValues(alpha: 0.6);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         for (var i = 0; i < 5; i++)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () => onPick(i + 1),
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: Icon(
-                  i < value ? Icons.star_rounded : Icons.star_outline_rounded,
-                  size: 44,
-                  color: i < value
-                      ? theme.ratingStarActive
-                      : theme.systemText.withValues(alpha: 0.6),
-                ),
+            padding: EdgeInsets.symmetric(horizontal: size > 28 ? 4 : 2),
+            child: _Tappable(
+              onTap: onPick == null ? null : () => onPick!(i + 1),
+              child: Icon(
+                i < value ? Icons.star_rounded : Icons.star_outline_rounded,
+                size: size,
+                color: i < value ? theme.ratingStarActive : inactive,
               ),
             ),
           ),
@@ -313,89 +435,68 @@ class _LargeStars extends StatelessWidget {
   }
 }
 
-class _SmallThumbs extends StatelessWidget {
-  const _SmallThumbs({required this.value, required this.theme});
+class _Thumbs extends StatelessWidget {
+  const _Thumbs({
+    required this.value,
+    required this.size,
+    required this.theme,
+    this.onPick,
+  });
 
-  /// 1 = positive, 0 = negative, -1 = nothing picked.
+  /// 1 = up, 0 = down, -1 = nothing.
   final int value;
+  final double size;
   final LivetexChatTheme theme;
+  final ValueChanged<bool>? onPick;
 
   @override
   Widget build(BuildContext context) {
-    final upActive = value == 1;
-    final downActive = value == 0;
+    final up = value == 1;
+    final down = value == 0;
     return Row(
       mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(
-          upActive ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
-          size: 22,
-          color: upActive
-              ? Colors.green
-              : theme.systemText.withValues(alpha: 0.5),
+        _Tappable(
+          onTap: onPick == null ? null : () => onPick!(true),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: size > 28 ? 26 : 8),
+            child: Icon(
+              up ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+              size: size,
+              color: up ? theme.ratingThumbUp : theme.ratingThumbInactive,
+            ),
+          ),
         ),
-        const SizedBox(width: 16),
-        Icon(
-          downActive ? Icons.thumb_down_alt : Icons.thumb_down_alt_outlined,
-          size: 22,
-          color: downActive
-              ? Colors.red
-              : theme.systemText.withValues(alpha: 0.5),
+        _Tappable(
+          onTap: onPick == null ? null : () => onPick!(false),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: size > 28 ? 26 : 8),
+            child: Icon(
+              down ? Icons.thumb_down_alt : Icons.thumb_down_alt_outlined,
+              size: size,
+              color: down ? theme.ratingThumbDown : theme.ratingThumbInactive,
+            ),
+          ),
         ),
       ],
     );
   }
 }
 
-class _LargeThumbs extends StatelessWidget {
-  const _LargeThumbs({
-    required this.value,
-    required this.theme,
-    required this.onPick,
-  });
+class _Tappable extends StatelessWidget {
+  const _Tappable({required this.child, required this.onTap});
 
-  /// 1 = positive picked, 0 = negative picked, -1 = nothing picked.
-  final int value;
-  final LivetexChatTheme theme;
-  final ValueChanged<bool> onPick;
+  final Widget child;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final upActive = value == 1;
-    final downActive = value == 0;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => onPick(true),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Icon(
-              upActive ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
-              size: 45,
-              color: upActive
-                  ? Colors.green
-                  : theme.systemText.withValues(alpha: 0.5),
-            ),
-          ),
-        ),
-        const SizedBox(width: 52),
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => onPick(false),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Icon(
-              downActive ? Icons.thumb_down_alt : Icons.thumb_down_alt_outlined,
-              size: 45,
-              color: downActive
-                  ? Colors.red
-                  : theme.systemText.withValues(alpha: 0.5),
-            ),
-          ),
-        ),
-      ],
+    if (onTap == null) return child;
+    return InkResponse(
+      onTap: onTap,
+      radius: 28,
+      child: child,
     );
   }
 }
