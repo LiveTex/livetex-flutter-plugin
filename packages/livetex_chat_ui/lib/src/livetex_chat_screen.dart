@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
@@ -128,6 +129,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   void _wire() {
     _subs.addAll([
       _chat.connectionState.listen((s) async {
+        developer.log("[ui] connectionState=$s", name: "livetex_ui");
         if (!mounted) return;
         setState(() => _conn = s);
         if (s == LivetexConnectionState.connected &&
@@ -140,6 +142,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         }
       }),
       _chat.dialogState.listen((d) {
+        developer.log(
+          "[ui] dialogState status=${d?.status} rate.enabledType=${d?.rate?.enabledType} rate.isSet=${d?.rate?.isSet?.value}",
+          name: "livetex_ui",
+        );
         if (!mounted) return;
         setState(() {
           _dialog = d;
@@ -404,10 +410,16 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               expanded: _topRatingExpanded,
               onExpandedChanged: (v) =>
                   setState(() => _topRatingExpanded = v),
-              onSubmit: (value) => _chat.sendRating(
-                rateType: topRate.enabledType!,
-                value: value,
-              ),
+              onSubmit: (value) {
+                developer.log(
+                  "[ui] sendRating(top) type=${topRate.enabledType} value=$value",
+                  name: "livetex_ui",
+                );
+                _chat.sendRating(
+                  rateType: topRate.enabledType!,
+                  value: value,
+                );
+              },
             ),
           Expanded(
             child: GestureDetector(

@@ -65,7 +65,14 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
       _submitTimeout?.cancel();
       _submitting = false;
       _picked = -1;
-      widget.onExpandedChanged(false);
+      // Defer the parent setState — calling onExpandedChanged synchronously
+      // inside didUpdateWidget triggers a parent rebuild during the child
+      // build phase, which can blow up InheritedWidget dependent tracking
+      // ("_dependents.isEmpty is not true" red screen). Run after this
+      // frame completes.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onExpandedChanged(false);
+      });
     }
     // Reset selection on outside-tap collapse so the next expand starts
     // clean (matches §4.3 — re-expand resets the picked value).
