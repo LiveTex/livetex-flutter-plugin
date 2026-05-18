@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
@@ -407,10 +408,21 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               expanded: _topRatingExpanded,
               onExpandedChanged: (v) =>
                   setState(() => _topRatingExpanded = v),
-              onSubmit: (value) => _chat.sendRating(
-                rateType: topRate.enabledType!,
-                value: value,
-              ),
+              onSubmit: (value) {
+                developer.log(
+                  "[ui] TOP onSubmit value=$value "
+                  "conn=$_conn "
+                  "stickyType=${_stickyTopRate?.enabledType} "
+                  "stateStatus=${_dialog?.status} "
+                  "stateRate.enabledType=${_dialog?.rate?.enabledType} "
+                  "stateRate.isSet=${_dialog?.rate?.isSet?.value}",
+                  name: "livetex_ui",
+                );
+                _chat.sendRating(
+                  rateType: topRate.enabledType!,
+                  value: value,
+                );
+              },
             ),
           Expanded(
             child: GestureDetector(

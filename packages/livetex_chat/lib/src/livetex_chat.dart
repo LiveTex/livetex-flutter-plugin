@@ -420,16 +420,22 @@ final class LivetexChat {
     String? comment,
   }) {
     final s = _session;
-    if (s == null) return;
+    if (s == null) {
+      // DIAG: surfaces session loss as a trace event so the on-device log
+      // shows it next to the UI's TOP onSubmit log. Remove once the
+      // closed-dialog rating issue is confirmed/fixed.
+      _emitTrace("sendRating SKIPPED (no session) type=$rateType value=$value");
+      return;
+    }
     final corr = _nextCorrelation("rate");
-    s.sendRawJson(
-      VisitorOutgoing.rating(
-        correlationId: corr,
-        rateType: rateType,
-        value: value,
-        comment: comment,
-      ),
+    final json = VisitorOutgoing.rating(
+      correlationId: corr,
+      rateType: rateType,
+      value: value,
+      comment: comment,
     );
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void sendAttributes({
