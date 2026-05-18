@@ -123,7 +123,7 @@ class _AttrField extends StatelessWidget {
       style: TextStyle(fontSize: 16, color: theme.composerText),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: theme.composerHint),
+        hintStyle: TextStyle(color: theme.attributesHint),
         counterText: "",
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 24,

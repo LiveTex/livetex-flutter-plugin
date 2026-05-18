@@ -60,6 +60,14 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   VisitorDialogState? _dialog;
   LivetexConnectionState _conn = LivetexConnectionState.disconnected;
 
+  /// Last seen `rate` payload — kept so the top panel survives an update
+  /// where the server omits `rate` (notably the first `dialogState` after a
+  /// WebSocket reconnect). Mirrors native `ChatViewModel.pendingRatingPanelState`
+  /// + the `updateDialogState` fallback in `ChatActivity` (see audit notes).
+  /// Top panel itself is shown only while the dialog is NOT unassigned, so
+  /// this never overlaps with the bottom rating card.
+  DialogRateState? _stickyTopRate;
+
   bool _typingVisible = false;
   Timer? _typingTimer;
   DateTime? _lastTypingSent;
@@ -111,6 +119,14 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         if (!mounted) return;
         setState(() {
           _dialog = d;
+          // Refresh sticky top rate whenever the server actually sends one.
+          // Status doesn't gate the write — even an unassigned state with a
+          // submitted result is worth keeping, so a later re-open shows the
+          // correct value. Visibility is gated separately in build().
+          final r = d?.rate;
+          if (r != null && (r.enabledType?.isNotEmpty ?? false)) {
+            _stickyTopRate = r;
+          }
           // Drop department picker if the dialog moved to an assigned state
           // before the user picked — server routed it for us.
           if (d != null &&
@@ -313,17 +329,22 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   Widget _buildScaffold(LivetexChatTheme theme) {
     final d = _dialog;
-    // Top vs bottom rating are mutually exclusive — same as native
-    // (ChatViewModel.onDialogStateUpdate). The server decides which one is
-    // active by combining `rate.enabledType` with `dialog.status`: while the
-    // dialog is assigned to an operator the top panel is shown; once the
-    // operator closes the dialog (unassigned) it switches to the bottom
-    // form. If the server stops sending a rate, both disappear.
-    final rate = d?.rate;
-    final hasRate = rate != null && (rate.enabledType?.isNotEmpty ?? false);
+    // Top vs bottom rating are mutually exclusive in our UI: while the
+    // dialog is active (status != unassigned) the top panel is shown; once
+    // the operator closes the dialog (unassigned) it switches to the
+    // bottom rating card. Mirroring `ChatActivity.updateDialogState:795-803`
+    // we fall back to the last seen rate so the top panel survives a
+    // `dialogState` update that omits `rate` (e.g. the first one after a
+    // WebSocket reconnect).
+    final stateRate = d?.rate;
+    final hasStateRate =
+        stateRate != null && (stateRate.enabledType?.isNotEmpty ?? false);
     final isUnassigned = d?.status == DialogStatus.unassigned;
-    final showTopRating = hasRate && !isUnassigned;
-    final showBottomRating = hasRate && isUnassigned;
+    final topRate = stateRate ?? _stickyTopRate;
+    final hasTopRate =
+        topRate != null && (topRate.enabledType?.isNotEmpty ?? false);
+    final showTopRating = hasTopRate && !isUnassigned;
+    final showBottomRating = hasStateRate && isUnassigned;
     return Scaffold(
       backgroundColor: theme.background,
       appBar: AppBar(
@@ -348,10 +369,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
             ConnectionBanner(state: _conn, onRetry: () => _chat.connect()),
           if (showTopRating)
             TopRatingPanel(
-              key: ValueKey("top-${rate.enabledType}"),
-              rate: rate,
+              key: ValueKey("top-${topRate.enabledType}"),
+              rate: topRate,
               onSubmit: (value) => _chat.sendRating(
-                rateType: rate.enabledType!,
+                rateType: topRate.enabledType!,
                 value: value,
               ),
             ),
@@ -364,9 +385,9 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               onPressBotButton: _onPressBotButton,
               bottomRating: showBottomRating
                   ? _BottomRatingDescriptor(
-                      rate: rate,
+                      rate: stateRate,
                       onSubmit: (value, comment) => _chat.sendRating(
-                        rateType: rate.enabledType!,
+                        rateType: stateRate.enabledType!,
                         value: value,
                         comment: comment,
                       ),

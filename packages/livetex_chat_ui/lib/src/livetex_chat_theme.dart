@@ -27,6 +27,7 @@ class LivetexChatTheme {
     required this.departmentButtonText,
     required this.attributesAccent,
     required this.attributesAccentText,
+    required this.attributesHint,
     required this.composerBackground,
     required this.composerField,
     required this.composerFieldStroke,
@@ -76,6 +77,7 @@ class LivetexChatTheme {
   final Color departmentButtonText;
   final Color attributesAccent;
   final Color attributesAccentText;
+  final Color attributesHint;
   final Color composerBackground;
   final Color composerField;
   final Color composerFieldStroke;
@@ -141,6 +143,10 @@ class LivetexChatTheme {
       departmentButtonText: Color(0xFF000000),
       attributesAccent: Color(0xFF24973E),
       attributesAccentText: Color(0xFFFFFFFF),
+      // Native demo-lib uses #808080 specifically for attributesContainerView
+      // hints (colors.xml: colorHint) — composer's #C4C4C4 is too washed-out
+      // on the white attributes card and the field labels become unreadable.
+      attributesHint: Color(0xFF808080),
       composerBackground: Color(0xFFFFFFFF),
       composerField: Color(0xFFFFFFFF),
       composerFieldStroke: Color(0xFFE5E5E5),
