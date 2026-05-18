@@ -58,7 +58,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   List<ChatMessage> _messages = const [];
   VisitorDialogState? _dialog;
-  DialogRateState? _lastRate; // Sticky per rate-requirements.md §2.3
   LivetexConnectionState _conn = LivetexConnectionState.disconnected;
 
   bool _typingVisible = false;
@@ -66,7 +65,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   DateTime? _lastTypingSent;
 
   bool _afterConnectDone = false;
-  bool _topRatingShownOnce = false;
 
   final List<_PendingBottom> _bottomQueue = [];
   List<DepartmentItem> _pendingDepartments = const [];
@@ -113,12 +111,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
         if (!mounted) return;
         setState(() {
           _dialog = d;
-          if (d?.rate?.enabledType?.isNotEmpty ?? false) {
-            _lastRate = d!.rate;
-            if (d.status != DialogStatus.unassigned) {
-              _topRatingShownOnce = true;
-            }
-          }
           // Drop department picker if the dialog moved to an assigned state
           // before the user picked — server routed it for us.
           if (d != null &&
@@ -150,6 +142,15 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
       _chat.departmentRequest.listen((deps) {
         if (!mounted) return;
         if (deps.isEmpty) return;
+        // After reconnect the server may resend the original
+        // departmentRequest even though we already routed the dialog (e.g.
+        // operator assigned via admin panel while we were offline). Showing
+        // a picker for a dialog that already has an operator just confuses
+        // the user — ignore.
+        if (_dialog != null &&
+            _dialog!.status != DialogStatus.unassigned) {
+          return;
+        }
         if (deps.length == 1) {
           final corr = "dep-${DateTime.now().millisecondsSinceEpoch}";
           _chat.selectDepartment(correlationId: corr, id: deps.first.id);
@@ -312,12 +313,16 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
 
   Widget _buildScaffold(LivetexChatTheme theme) {
     final d = _dialog;
-    final displayRate = _lastRate ?? d?.rate;
-    final hasRate =
-        displayRate != null && (displayRate.enabledType?.isNotEmpty ?? false);
+    // Top vs bottom rating are mutually exclusive — same as native
+    // (ChatViewModel.onDialogStateUpdate). The server decides which one is
+    // active by combining `rate.enabledType` with `dialog.status`: while the
+    // dialog is assigned to an operator the top panel is shown; once the
+    // operator closes the dialog (unassigned) it switches to the bottom
+    // form. If the server stops sending a rate, both disappear.
+    final rate = d?.rate;
+    final hasRate = rate != null && (rate.enabledType?.isNotEmpty ?? false);
     final isUnassigned = d?.status == DialogStatus.unassigned;
-    final showTopRating =
-        hasRate && (!isUnassigned || _topRatingShownOnce);
+    final showTopRating = hasRate && !isUnassigned;
     final showBottomRating = hasRate && isUnassigned;
     return Scaffold(
       backgroundColor: theme.background,
@@ -343,10 +348,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
             ConnectionBanner(state: _conn, onRetry: () => _chat.connect()),
           if (showTopRating)
             TopRatingPanel(
-              key: ValueKey("top-${displayRate.enabledType}"),
-              rate: displayRate,
+              key: ValueKey("top-${rate.enabledType}"),
+              rate: rate,
               onSubmit: (value) => _chat.sendRating(
-                rateType: displayRate.enabledType!,
+                rateType: rate.enabledType!,
                 value: value,
               ),
             ),
@@ -359,9 +364,9 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               onPressBotButton: _onPressBotButton,
               bottomRating: showBottomRating
                   ? _BottomRatingDescriptor(
-                      rate: displayRate,
+                      rate: rate,
                       onSubmit: (value, comment) => _chat.sendRating(
-                        rateType: displayRate.enabledType!,
+                        rateType: rate.enabledType!,
                         value: value,
                         comment: comment,
                       ),
