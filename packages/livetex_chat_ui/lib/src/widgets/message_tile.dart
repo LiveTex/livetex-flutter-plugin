@@ -1,8 +1,10 @@
 import "package:cached_network_image/cached_network_image.dart";
 import "package:flutter/material.dart";
+import "package:flutter_cache_manager/flutter_cache_manager.dart";
 import "package:intl/intl.dart";
 import "package:livetex_chat/livetex_chat.dart";
 import "package:photo_view/photo_view.dart";
+import "package:share_plus/share_plus.dart";
 import "package:url_launcher/url_launcher.dart";
 
 import "../livetex_chat_theme.dart";
@@ -308,15 +310,56 @@ class _MessageBubble extends StatelessWidget {
       builder: (ctx) => Dialog(
         insetPadding: EdgeInsets.zero,
         backgroundColor: Colors.transparent,
-        child: PhotoView(
-          imageProvider: CachedNetworkImageProvider(url),
-          backgroundDecoration: const BoxDecoration(color: Colors.black),
-          minScale: PhotoViewComputedScale.contained,
-          maxScale: PhotoViewComputedScale.covered * 3,
-          onTapUp: (c, details, ctrl) => Navigator.pop(ctx),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            PhotoView(
+              imageProvider: CachedNetworkImageProvider(url),
+              backgroundDecoration: const BoxDecoration(color: Colors.black),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 3,
+              onTapUp: (c, details, ctrl) => Navigator.pop(ctx),
+            ),
+            Positioned(
+              top: 32,
+              right: 8,
+              child: Row(
+                children: [
+                  // Save / share via system sheet. Mirrors native sdk-ui —
+                  // Android `ImageActivity.downloadImage()` uses
+                  // DownloadManager, iOS uses UIActivityViewController; on
+                  // Flutter the share sheet covers both with one UI.
+                  IconButton(
+                    icon: const Icon(Icons.save_alt, color: Colors.white),
+                    tooltip: "Сохранить",
+                    onPressed: () => _saveImage(ctx, url),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    tooltip: "Закрыть",
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _saveImage(BuildContext context, String url) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      // Image is already in the CachedNetworkImage cache from rendering,
+      // so this hits disk without an extra HTTP request in the common case.
+      final file = await DefaultCacheManager().getSingleFile(url);
+      await Share.shareXFiles([XFile(file.path)]);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Не удалось сохранить изображение: $e")),
+      );
+    }
   }
 }
 

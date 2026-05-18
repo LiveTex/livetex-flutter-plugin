@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
@@ -33,6 +34,8 @@ class LivetexChatScreen extends StatefulWidget {
     this.autoconnect = true,
     this.afterConnected,
     this.theme,
+    this.showAttributesForm = true,
+    this.onAttributesRequested,
   });
 
   final LivetexChatConfig config;
@@ -41,6 +44,20 @@ class LivetexChatScreen extends StatefulWidget {
   final bool autoconnect;
   final Future<void> Function(LivetexChat chat)? afterConnected;
   final LivetexChatTheme? theme;
+
+  /// When `true` (default) the built-in `AttributesForm` is added to the
+  /// bottom-area FIFO queue on every `attributesRequest` from the server.
+  /// Set to `false` if the host app collects visitor info elsewhere (own
+  /// onboarding, CRM lookup, etc.) and does not want the inline form. The
+  /// server still expects the data eventually — the host can respond via
+  /// `chat.sendAttributes(...)` directly, or hook into
+  /// [onAttributesRequested] to be notified.
+  final bool showAttributesForm;
+
+  /// Called every time the server sends `attributesRequest`. Fires
+  /// regardless of [showAttributesForm] — host apps that want to react
+  /// (analytics, custom UI, autofill from CRM) can do so here.
+  final VoidCallback? onAttributesRequested;
 
   @override
   State<LivetexChatScreen> createState() => _LivetexChatScreenState();
@@ -214,6 +231,8 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       }),
       _chat.attributesRequest.listen((_) {
         if (!mounted) return;
+        widget.onAttributesRequested?.call();
+        if (!widget.showAttributesForm) return;
         setState(() {
           if (!_bottomQueue.contains(_PendingBottom.attributes)) {
             _bottomQueue.add(_PendingBottom.attributes);
@@ -282,18 +301,60 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
   }
 
   Future<void> _pickAndSendFile() async {
-    final r = await FilePicker.platform.pickFiles(
-      withData: true,
-      allowMultiple: false,
-    );
-    if (r == null || r.files.isEmpty) return;
+    developer.log("[ui] file pick start", name: "livetex_ui");
+    final FilePickerResult? r;
+    try {
+      r = await FilePicker.platform.pickFiles(
+        withData: true,
+        allowMultiple: false,
+      );
+    } catch (e, st) {
+      developer.log(
+        "[ui] file pick FAILED: $e",
+        name: "livetex_ui",
+        error: e,
+        stackTrace: st,
+      );
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text("Не удалось открыть выбор файла: $e")),
+        );
+      }
+      return;
+    }
+    if (r == null || r.files.isEmpty) {
+      developer.log("[ui] file pick cancelled", name: "livetex_ui");
+      return;
+    }
     final pf = r.files.single;
+    developer.log(
+      "[ui] file picked name=${pf.name} size=${pf.size} "
+      "path=${pf.path != null ? 'yes' : 'null'} "
+      "bytes=${pf.bytes != null ? '${pf.bytes!.length}b' : 'null'}",
+      name: "livetex_ui",
+    );
     if (pf.path != null && pf.path!.isNotEmpty) {
-      await _chat.sendFile(File(pf.path!));
+      try {
+        await _chat.sendFile(File(pf.path!));
+        developer.log("[ui] sendFile by path returned", name: "livetex_ui");
+      } catch (e, st) {
+        developer.log(
+          "[ui] sendFile by path FAILED: $e",
+          name: "livetex_ui",
+          error: e,
+          stackTrace: st,
+        );
+      }
       return;
     }
     final bytes = pf.bytes;
-    if (bytes == null) return;
+    if (bytes == null) {
+      developer.log(
+        "[ui] file has neither path nor bytes — aborting",
+        name: "livetex_ui",
+      );
+      return;
+    }
     final name = pf.name.isEmpty
         ? "upload.bin"
         : pf.name.replaceAll(RegExp(r"[/\\]"), "_");
@@ -303,6 +364,14 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     await tmp.writeAsBytes(bytes, flush: true);
     try {
       await _chat.sendFile(tmp, logicalName: name);
+      developer.log("[ui] sendFile by bytes returned", name: "livetex_ui");
+    } catch (e, st) {
+      developer.log(
+        "[ui] sendFile by bytes FAILED: $e",
+        name: "livetex_ui",
+        error: e,
+        stackTrace: st,
+      );
     } finally {
       try {
         if (await tmp.exists()) await tmp.delete();
