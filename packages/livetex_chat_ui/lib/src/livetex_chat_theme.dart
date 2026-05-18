@@ -106,6 +106,125 @@ class LivetexChatTheme {
   final double cardRadius;
   final double composerFieldRadius;
 
+  /// Returns a new theme with the given fields replaced. Use this from a
+  /// host app to brand the chat:
+  ///
+  /// ```dart
+  /// final myTheme = LivetexChatTheme.livetex().copyWith(
+  ///   outgoingBubble: const Color(0xFF1E88E5),
+  ///   composerAction: const Color(0xFF1E88E5),
+  /// );
+  /// ```
+  LivetexChatTheme copyWith({
+    Color? background,
+    Color? outgoingBubble,
+    Color? outgoingText,
+    Color? outgoingTime,
+    Color? incomingBubble,
+    Color? incomingText,
+    Color? incomingTime,
+    Color? operatorName,
+    Color? systemText,
+    Color? appBarBackground,
+    Color? appBarForeground,
+    Color? connectionBanner,
+    Color? connectionBannerText,
+    Color? botKeyboardButton,
+    Color? botKeyboardButtonDisabled,
+    Color? botKeyboardButtonText,
+    Color? departmentButton,
+    Color? departmentButtonText,
+    Color? attributesAccent,
+    Color? attributesAccentText,
+    Color? attributesHint,
+    Color? composerBackground,
+    Color? composerField,
+    Color? composerFieldStroke,
+    Color? composerHint,
+    Color? composerAction,
+    Color? composerActionDisabled,
+    Color? composerAddAction,
+    Color? composerAddActionDisabled,
+    Color? composerText,
+    Color? ratingPanelBackground,
+    Color? ratingFormBackground,
+    Color? ratingStarActive,
+    Color? ratingStarInactive,
+    Color? ratingThumbUp,
+    Color? ratingThumbDown,
+    Color? ratingThumbInactive,
+    Color? ratingButton,
+    Color? ratingButtonText,
+    Color? ratingButtonDisabledBg,
+    Color? ratingButtonDisabledText,
+    Color? ratingButtonStroke,
+    Color? ratingButtonStrokeDisabled,
+    Color? quoteAccent,
+    double? bubbleRadius,
+    double? controlRadius,
+    double? cardRadius,
+    double? composerFieldRadius,
+  }) {
+    return LivetexChatTheme(
+      background: background ?? this.background,
+      outgoingBubble: outgoingBubble ?? this.outgoingBubble,
+      outgoingText: outgoingText ?? this.outgoingText,
+      outgoingTime: outgoingTime ?? this.outgoingTime,
+      incomingBubble: incomingBubble ?? this.incomingBubble,
+      incomingText: incomingText ?? this.incomingText,
+      incomingTime: incomingTime ?? this.incomingTime,
+      operatorName: operatorName ?? this.operatorName,
+      systemText: systemText ?? this.systemText,
+      appBarBackground: appBarBackground ?? this.appBarBackground,
+      appBarForeground: appBarForeground ?? this.appBarForeground,
+      connectionBanner: connectionBanner ?? this.connectionBanner,
+      connectionBannerText: connectionBannerText ?? this.connectionBannerText,
+      botKeyboardButton: botKeyboardButton ?? this.botKeyboardButton,
+      botKeyboardButtonDisabled:
+          botKeyboardButtonDisabled ?? this.botKeyboardButtonDisabled,
+      botKeyboardButtonText:
+          botKeyboardButtonText ?? this.botKeyboardButtonText,
+      departmentButton: departmentButton ?? this.departmentButton,
+      departmentButtonText: departmentButtonText ?? this.departmentButtonText,
+      attributesAccent: attributesAccent ?? this.attributesAccent,
+      attributesAccentText: attributesAccentText ?? this.attributesAccentText,
+      attributesHint: attributesHint ?? this.attributesHint,
+      composerBackground: composerBackground ?? this.composerBackground,
+      composerField: composerField ?? this.composerField,
+      composerFieldStroke: composerFieldStroke ?? this.composerFieldStroke,
+      composerHint: composerHint ?? this.composerHint,
+      composerAction: composerAction ?? this.composerAction,
+      composerActionDisabled:
+          composerActionDisabled ?? this.composerActionDisabled,
+      composerAddAction: composerAddAction ?? this.composerAddAction,
+      composerAddActionDisabled:
+          composerAddActionDisabled ?? this.composerAddActionDisabled,
+      composerText: composerText ?? this.composerText,
+      ratingPanelBackground:
+          ratingPanelBackground ?? this.ratingPanelBackground,
+      ratingFormBackground: ratingFormBackground ?? this.ratingFormBackground,
+      ratingStarActive: ratingStarActive ?? this.ratingStarActive,
+      ratingStarInactive: ratingStarInactive ?? this.ratingStarInactive,
+      ratingThumbUp: ratingThumbUp ?? this.ratingThumbUp,
+      ratingThumbDown: ratingThumbDown ?? this.ratingThumbDown,
+      ratingThumbInactive: ratingThumbInactive ?? this.ratingThumbInactive,
+      ratingButton: ratingButton ?? this.ratingButton,
+      ratingButtonText: ratingButtonText ?? this.ratingButtonText,
+      ratingButtonDisabledBg:
+          ratingButtonDisabledBg ?? this.ratingButtonDisabledBg,
+      ratingButtonDisabledText:
+          ratingButtonDisabledText ?? this.ratingButtonDisabledText,
+      ratingButtonStroke: ratingButtonStroke ?? this.ratingButtonStroke,
+      ratingButtonStrokeDisabled:
+          ratingButtonStrokeDisabled ?? this.ratingButtonStrokeDisabled,
+      quoteAccent: quoteAccent ?? this.quoteAccent,
+      bubbleRadius: bubbleRadius ?? this.bubbleRadius,
+      controlRadius: controlRadius ?? this.controlRadius,
+      cardRadius: cardRadius ?? this.cardRadius,
+      composerFieldRadius: composerFieldRadius ?? this.composerFieldRadius,
+    );
+  }
+
   /// Native-matching preset (Android `demo-lib`). Values from:
   ///   - drawable/rounded_rectangle_blue.xml (outgoing #3E7AD7, radius 30dp)
   ///   - drawable/bg_gray_rounded.xml (incoming #F5F5F5, radius 30dp)

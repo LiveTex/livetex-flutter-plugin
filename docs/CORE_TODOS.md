@@ -203,7 +203,66 @@ command:
 
 UI после этого скрывает индикатор «загрузка истории» когда `canLoadMoreHistory == false`.
 
-### 2.6. Backoff при `tooManyRequests`
+### 2.6. Reconnect race: `connect()` не отменяет активный `_reconnectTimer`
+**Связано с:** обнаружено логическим аудитом ветки. UI частично закрыл (auto-reconnect теперь срабатывает только при `_conn == disconnected`), но core всё равно остаётся уязвим, если кто-то вызовет `connect()` снаружи в неудачный момент.
+
+**Что происходит сейчас:** `connect()` (`livetex_chat.dart:103-106`) выставляет `_disconnectRequested = false` и сразу же зовёт `_openSession()`. Активный `_reconnectTimer` НЕ отменяется. Если приложение свернули посередине 30-секундного backoff, а потом разверyнули, `connect()` запускает новую сессию мгновенно — а потом ещё и timer фaerит через секунды и запускает **вторую** сессию. Старая и новая работают параллельно, `_session` перезаписывается посередине жизни первой, её `onDisconnected` срабатывает позже и шедулит ещё один reconnect. Каскад дублей сообщений и зомби-сессий.
+
+**Что нужно:** в `connect()` (и в `_scheduleReconnect`) первой строкой отменять активный таймер:
+```dart
+Future<void> connect() async {
+  _disconnectRequested = false;
+  _reconnectTimer?.cancel();
+  _reconnectTimer = null;
+  await _openSession();
+}
+```
+
+И ещё хорошо бы guard внутри `_openSession()` — если `_connNow == connecting`, no-op. Это защитит от двух concurrent connect() даже если внешний код их вызывает.
+
+### 2.7. Pending-сообщения «зависают» в `sending` после reconnect навсегда
+**Связано с:** обнаружено логическим аудитом ветки.
+
+**Что происходит сейчас:** `sendText` / `sendFile` вставляют оптимистическую строку `ChatMessage(id: "pending:$corr", sendState: sending)` в `_byId` / `_order`. Реальный `id` приходит от сервера в `VisitorResult` через подписку `_msgSub`. При reconnect `_openSession()` отменяет `_msgSub` и заменяет `_session` — старая подписка мертва. Если `result` для отправленного фрейма приходит **после** этой точки (или не приходит вовсе из-за того что отправлялось в drained socket), pending-строка уже не получит свой id и навечно зависнет с спиннером.
+
+**Что нужно:** в `_openSession()` (или в `_onSocketDone()`) перед очисткой `_msgSub` пройти `_byId` и пометить все строки с ключом `pending:*` как `failed`:
+
+```dart
+void _markPendingAsFailed() {
+  var changed = false;
+  for (final entry in _byId.entries) {
+    if (entry.key.startsWith("pending:") &&
+        entry.value.sendState == ChatMessageSendState.sending) {
+      _byId[entry.key] = entry.value.copyWith(
+        sendState: ChatMessageSendState.failed,
+      );
+      changed = true;
+    }
+  }
+  if (changed) _emitMessages();
+}
+```
+
+Зовётся первой строкой в `_openSession()` и в `_onSocketDone()`. UI после этого корректно покажет «failed» иконку (она у нас уже рендерится), а в будущем — кнопку tap-to-resend.
+
+### 2.8. Состояние `reconnecting` — мёртвый код
+**Связано с:** обнаружено и логическим, и quality-аудитами.
+
+**Что происходит сейчас:** в `_openSession()` идёт `_session = null` строкой 115, а на следующей же строке тернарник `_session == null ? connecting : reconnecting` — условие всегда true. `_setConn(reconnecting)` никогда не вызывается, и состояние `LivetexConnectionState.reconnecting` фактически невозможно увидеть из стрима.
+
+**Что нужно:**
+```dart
+final wasConnected = _session != null;
+await _session?.close();
+_session = null;
+_setConn(wasConnected
+    ? LivetexConnectionState.reconnecting
+    : LivetexConnectionState.connecting);
+```
+
+После этого UI сможет отличать первичное подключение от переподключения (например, разные тексты в баннере).
+
+### 2.9. Backoff при `tooManyRequests`
 **Связано с:** P9 из design-doc.
 
 **Что сейчас:** если сервер ответил `ApiError.code = "tooManyRequests"`, мы это просто эмитим как ошибку. Следующая отправка может пойти моментально.
@@ -223,6 +282,31 @@ UI после этого скрывает индикатор «загрузка 
 | 2.3 | `Future<SendResult>` из `send{Rating,Attributes,Department}` | `LivetexChat` | Средний | Снимет 10s safety-net таймер в UI |
 | 2.4 | `git:` → `path:` в UI pubspec | `livetex_chat_ui/pubspec.yaml` | Низкий (после merge ветки) | Уберёт мой `dependency_overrides` |
 | 2.5 | `canLoadMoreHistory` + флаг исчерпания | `LivetexChat.loadHistory` | Низкий | Корректное поведение при долгой истории |
-| 2.6 | Backoff на `tooManyRequests` | `LivetexChat` | Низкий | Устойчивость к rate limit |
+| 2.6 | `connect()` отменяет `_reconnectTimer`; guard на parallel-connect | `LivetexChat.connect` / `_openSession` | **Высокий** | Гонка двух сессий при background → resume в момент backoff |
+| 2.7 | Помечать `pending:*` сообщения как `failed` перед сменой `_msgSub` | `LivetexChat._openSession` / `_onSocketDone` | **Высокий** | Сообщения в `sending` после reconnect не зависают навсегда |
+| 2.8 | Корректно эмитить `reconnecting` (сейчас всегда `connecting`) | `LivetexChat._openSession:115-119` | Низкий | UI сможет отличать первичное подключение от reconnect |
+| 2.9 | Backoff на `tooManyRequests` | `LivetexChat` | Низкий | Устойчивость к rate limit |
 
-После 2.1 и 2.3 я (UI-сторона) сделаю последний cleanup-PR: уберу outbound trace из 1.3 (если будет принято решение что он избыточен) и safety-net таймер из `rating_widget.dart`.
+После 2.1, 2.3, 2.7 я (UI-сторона) сделаю последний cleanup-PR: уберу outbound trace из 1.3 (если будет принято решение что он избыточен), safety-net таймер из `rating_widget.dart`, и подключу tap-to-resend для `failed`-сообщений (нужен метод `LivetexChat.resendMessage(correlationId)`).
+
+---
+
+## Приложение А. Что обнаружил аудит ветки (как routed)
+
+Полный отчёт security + logic + quality audits лежит в истории чата на разработке. Здесь только что куда пошло.
+
+### Закрыто в этой же ветке (UI-сторона):
+- SEC: scheme allowlist (`http`/`https` only) на `launchUrl` для button.url и file.url — закрывает intent-hijack / deep-link trigger через server-supplied URL.
+- SEC: snackbar при провале `launchUrl` больше не показывает raw URL (минор phishing surface).
+- SEC: `developer.log` в `_pickAndSendFile` теперь под `kDebugMode` — file names / sizes / paths не утекают в logcat в release-сборках.
+- LOGIC: `_ratingMode` теперь lock'ается на первом же non-null rate (раньше — только если был `enabledType`, что ломало кейс «зашёл в уже оценённый диалог»).
+- LOGIC: `_sendText` не очищает текстовое поле, если соединения нет (раньше — теряли сообщение).
+- LOGIC: auto-reconnect на `AppLifecycleState.resumed` срабатывает только при `_conn == disconnected` (раньше — гонка с backoff timer).
+- QUALITY: `LivetexChatTheme.copyWith` добавлен — host app может брендировать без копирования 43 аргументов.
+- QUALITY: `attributes_form.dart` использует `theme.composerFieldStroke` вместо хардкода `#E5E5E5`.
+- QUALITY: library-doc-комментарий на `livetex_chat_ui.dart`.
+
+### Передано сюда (core / разработчики SDK):
+- 2.6 — `connect()` не отменяет `_reconnectTimer`.
+- 2.7 — pending-сообщения зависают после reconnect.
+- 2.8 — `reconnecting` state мёртвый.

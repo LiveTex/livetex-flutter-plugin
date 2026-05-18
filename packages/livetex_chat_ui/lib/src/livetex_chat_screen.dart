@@ -3,6 +3,7 @@ import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
+import "package:flutter/foundation.dart" show kDebugMode;
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 import "package:url_launcher/url_launcher.dart";
@@ -136,13 +137,12 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Auto-reconnect on app resume: if the app was backgrounded the OS
-    // tends to suspend the WebSocket (Android Doze / iOS app-suspend) and
-    // we come back to a dead socket without the user touching anything.
-    // Don't make them tap "Повторить" themselves. Matches native iOS-SDK
-    // behavior: `background → disconnect, foreground → connect`.
+    // Auto-reconnect on app resume only when we're actually idle. If we
+    // are already `connecting` or `reconnecting`, firing connect() again
+    // races with a backoff timer that may fire seconds later, and we'd
+    // end up with two live sessions and overlapping subscriptions.
     if (state == AppLifecycleState.resumed &&
-        _conn != LivetexConnectionState.connected) {
+        _conn == LivetexConnectionState.disconnected) {
       unawaited(_chat.connect());
     }
   }
@@ -178,11 +178,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
           // Merge incoming rate with the cached one. The server can send
           // partial state-updates — verified on device: after a successful
           // sendRating in a closed dialog the next state has rate that only
-          // carries `isSet` and drops `enabledType`/`textBefore`/etc. A
-          // straight replace would lose `enabledType` (the panel can no
-          // longer tell five-point vs double-point) and the confirmation
-          // would never reach TopRatingPanel.didUpdateWidget — the
-          // spinner stays on until our 10s safety-net fires.
+          // carries `isSet` and drops `enabledType`/`textBefore`/etc.
           final r = d?.rate;
           if (r != null) {
             final cached = _stickyTopRate;
@@ -195,14 +191,16 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
               textAfter: r.textAfter ?? cached?.textAfter,
               isSet: r.isSet ?? cached?.isSet,
             );
-            // Mode is locked once, on the first rate that has enabledType.
-            // Routine status transitions (close/reopen) cannot flip a
-            // "финальная" config into "сквозная" or vice versa.
-            if (merged.enabledType?.isNotEmpty ?? false) {
-              _ratingMode ??= d!.status == DialogStatus.unassigned
-                  ? _RatingMode.bottomCard
-                  : _RatingMode.topSticky;
-            }
+            // Mode is locked once, on the first rate payload that arrives.
+            // Decision: if the dialog is unassigned at this point, the
+            // backend is in "финальная" mode (rating only at end of chat);
+            // otherwise "сквозная". Locking is independent of whether
+            // `enabledType` is present — a state with only `isSet` (e.g.
+            // when the user re-enters a dialog that was already rated)
+            // still locks the mode, so the top panel actually shows.
+            _ratingMode ??= d!.status == DialogStatus.unassigned
+                ? _RatingMode.bottomCard
+                : _RatingMode.topSticky;
             if (_ratingMode == _RatingMode.topSticky) {
               _stickyTopRate = merged;
             }
@@ -300,59 +298,47 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     super.dispose();
   }
 
+  void _diag(String msg) {
+    // Guarded so we never leak file names, sizes, or paths to logcat in
+    // release builds shipped inside third-party host apps.
+    if (kDebugMode) developer.log(msg, name: "livetex_ui");
+  }
+
   Future<void> _pickAndSendFile() async {
-    developer.log("[ui] file pick start", name: "livetex_ui");
+    _diag("file pick start");
     final FilePickerResult? r;
     try {
       r = await FilePicker.platform.pickFiles(
         withData: true,
         allowMultiple: false,
       );
-    } catch (e, st) {
-      developer.log(
-        "[ui] file pick FAILED: $e",
-        name: "livetex_ui",
-        error: e,
-        stackTrace: st,
-      );
+    } catch (e) {
+      _diag("file pick FAILED: $e");
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text("Не удалось открыть выбор файла: $e")),
+          const SnackBar(content: Text("Не удалось открыть выбор файла")),
         );
       }
       return;
     }
     if (r == null || r.files.isEmpty) {
-      developer.log("[ui] file pick cancelled", name: "livetex_ui");
+      _diag("file pick cancelled");
       return;
     }
     final pf = r.files.single;
-    developer.log(
-      "[ui] file picked name=${pf.name} size=${pf.size} "
-      "path=${pf.path != null ? 'yes' : 'null'} "
-      "bytes=${pf.bytes != null ? '${pf.bytes!.length}b' : 'null'}",
-      name: "livetex_ui",
-    );
+    _diag("file picked size=${pf.size} hasPath=${pf.path != null} "
+        "hasBytes=${pf.bytes != null}");
     if (pf.path != null && pf.path!.isNotEmpty) {
       try {
         await _chat.sendFile(File(pf.path!));
-        developer.log("[ui] sendFile by path returned", name: "livetex_ui");
-      } catch (e, st) {
-        developer.log(
-          "[ui] sendFile by path FAILED: $e",
-          name: "livetex_ui",
-          error: e,
-          stackTrace: st,
-        );
+      } catch (e) {
+        _diag("sendFile by path FAILED: $e");
       }
       return;
     }
     final bytes = pf.bytes;
     if (bytes == null) {
-      developer.log(
-        "[ui] file has neither path nor bytes — aborting",
-        name: "livetex_ui",
-      );
+      _diag("file has neither path nor bytes — aborting");
       return;
     }
     final name = pf.name.isEmpty
@@ -364,14 +350,8 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     await tmp.writeAsBytes(bytes, flush: true);
     try {
       await _chat.sendFile(tmp, logicalName: name);
-      developer.log("[ui] sendFile by bytes returned", name: "livetex_ui");
-    } catch (e, st) {
-      developer.log(
-        "[ui] sendFile by bytes FAILED: $e",
-        name: "livetex_ui",
-        error: e,
-        stackTrace: st,
-      );
+    } catch (e) {
+      _diag("sendFile by bytes FAILED: $e");
     } finally {
       try {
         if (await tmp.exists()) await tmp.delete();
@@ -382,6 +362,16 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
   void _sendText() {
     final t = _textCtrl.text.trim();
     if (t.isEmpty) return;
+    // Belt-and-braces: the composer's send button is already disabled when
+    // not connected, but a stray keyboard `onSubmitted` (or a race with
+    // disconnect mid-tap) could still get here. Don't clear the text field
+    // — the user's typed message stays so they can retry once we reconnect.
+    if (_conn != LivetexConnectionState.connected) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text("Нет соединения. Сообщение не отправлено.")),
+      );
+      return;
+    }
     _textCtrl.clear();
     _chat.sendText(t);
   }
@@ -436,8 +426,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       if (!mounted) return;
       final ok = await _tryLaunchUrl(url);
       if (!ok && mounted) {
+        // No URL in the snackbar — server-supplied content shown verbatim
+        // is a small phishing surface.
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text("Не удалось открыть ссылку: $url")),
+          const SnackBar(content: Text("Не удалось открыть ссылку")),
         );
       }
     });
@@ -445,10 +437,15 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
 
   Future<bool> _tryLaunchUrl(String url) async {
     try {
-      return await launchUrl(
-        Uri.parse(url),
-        mode: LaunchMode.externalApplication,
-      );
+      final uri = Uri.tryParse(url);
+      // Allowlist http/https only. Server-supplied button URLs come from a
+      // chat operator/bot; an `intent://…` (Android deep-link hijack), a
+      // `javascript:` URL, or a custom scheme registered by another app on
+      // the device must NOT be auto-launched.
+      if (uri == null || (uri.scheme != "http" && uri.scheme != "https")) {
+        return false;
+      }
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
       return false;
     }

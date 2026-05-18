@@ -1,3 +1,9 @@
+/// Drop-in chat UI for the LiveTex Visitor-API plugin.
+///
+/// `LivetexChatScreen` is the one-line integration; `LivetexChatTheme`
+/// covers brand customization; the rest of the exports are the building
+/// blocks the screen is composed of, available for host apps that want
+/// to assemble their own layout. See `docs/INTEGRATION.md` for details.
 library livetex_chat_ui;
 
 export "src/livetex_chat_screen.dart";

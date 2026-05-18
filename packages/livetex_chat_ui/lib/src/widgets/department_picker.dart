@@ -39,6 +39,8 @@ class DepartmentPicker extends StatelessWidget {
             ),
             Container(
               decoration: BoxDecoration(
+                // From native demo-lib `ECEDF1` — kept inline pending a
+                // dedicated `departmentPickerBackground` theme token.
                 color: const Color(0xFFECEDF1),
                 borderRadius: BorderRadius.circular(theme.controlRadius),
               ),

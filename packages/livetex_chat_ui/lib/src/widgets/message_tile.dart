@@ -260,14 +260,7 @@ class _MessageBubble extends StatelessWidget {
               )
             else if (isFile && fileName != null)
               InkWell(
-                onTap: () {
-                  if (fileUrl != null && fileUrl!.isNotEmpty) {
-                    launchUrl(
-                      Uri.parse(fileUrl!),
-                      mode: LaunchMode.externalApplication,
-                    );
-                  }
-                },
+                onTap: () => _openFileUrl(context, fileUrl),
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -346,6 +339,31 @@ class _MessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Open a server-supplied file URL externally. Scheme-allowlisted to
+  /// http/https — a `file://`/`javascript:`/custom-scheme URL coming from
+  /// the operator must NOT trigger an OS handler, that's a deep-link /
+  /// intent-hijack vector when the SDK ships into third-party host apps.
+  Future<void> _openFileUrl(BuildContext context, String? raw) async {
+    if (raw == null || raw.isEmpty) return;
+    final uri = Uri.tryParse(raw);
+    final ok = uri != null && (uri.scheme == "http" || uri.scheme == "https");
+    if (!ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text("Не удалось открыть файл")),
+      );
+      return;
+    }
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text("Не удалось открыть файл")),
+        );
+      }
+    }
   }
 
   Future<void> _saveImage(BuildContext context, String url) async {

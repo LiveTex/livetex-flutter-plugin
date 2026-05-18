@@ -65,23 +65,22 @@ class _AttributesFormState extends State<AttributesForm> {
                 // Flutter elevation drops shadow downward only — the top
                 // edge of a white card on a white Scaffold has nothing to
                 // separate it from the background. A 1px hairline border
-                // (same #E5E5E5 used between fields and on the composer)
                 // gives the card a visible outline on all four sides.
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(theme.cardRadius),
-                  border: Border.all(color: const Color(0xFFE5E5E5)),
+                  border: Border.all(color: theme.composerFieldStroke),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _AttrField(controller: _name, hint: "Имя"),
-                    const Divider(height: 1, color: Color(0xFFE5E5E5)),
+                    Divider(height: 1, color: theme.composerFieldStroke),
                     _AttrField(
                       controller: _phone,
                       hint: "Телефон",
                       keyboardType: TextInputType.phone,
                     ),
-                    const Divider(height: 1, color: Color(0xFFE5E5E5)),
+                    Divider(height: 1, color: theme.composerFieldStroke),
                     _AttrField(
                       controller: _email,
                       hint: "E-mail",
