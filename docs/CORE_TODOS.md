@@ -125,6 +125,67 @@ command:
 
 ---
 
+## 4. После reconnect бот молчит и оценка не отправляется (sticky-routing)
+
+**Где:** `LivetexChat._openSession()` в `packages/livetex_chat/lib/src/livetex_chat.dart`.
+
+**Симптом (воспроизведён на устройстве):**
+1. Открыли чат, бот написал приветствие, нажимаем кнопки — бот отвечает, всё ок.
+2. Wi-Fi off → on (или диалог идёт долго и сокет переподнялся сам).
+3. После reconnect: `buttonPressed` фрейм уходит, сервер даже отвечает
+   `{"type":"result", "correlationId":"btn-…", "error":[]}` — но **бот не присылает
+   следующее сообщение**. `sendRating` уходит, но сервер вообще не отвечает на
+   `rate-*` correlation id, и через 10 сек срабатывает наш safety-net snackbar
+   «Не удалось подтвердить оценку».
+4. Полный перезапуск приложения → всё снова работает корректно.
+
+**Корневая причина:** Visitor-API использует sticky-routing — визитёрская сессия
+живёт на конкретной ноде (`visitor-api-i1-04…`), и сервер привязывает её к
+**persistent visitor token**, который выдаётся в первом `auth`-ответе. При
+последующих подключениях этот же `visitorToken` должен передаваться в auth, чтобы
+сервер вернул тот же `ws-endpoint` той же ноды.
+
+Native sdk-ui это делает явно — `ChatViewModel:472-495` достаёт `visitorToken`
+из `SharedPreferences` и при первом успешном auth сохраняет туда же выданный
+сервером токен:
+
+```java
+String visitorToken = sp.getString(Const.KEY_VISITOR_TOKEN, null);
+authData = AuthData.withVisitorToken(visitorToken);
+...
+.subscribe(visitorTokenReceived -> {
+    sp.edit().putString(Const.KEY_VISITOR_TOKEN, visitorTokenReceived).apply();
+});
+```
+
+В нашем `_openSession()` мы при **каждом** подключении передаём
+`config.visitorToken` (то, что лежит в конфиге с момента создания `LivetexChat`).
+Если в первом auth-ответе сервер выдал новый/обновлённый `visitorToken` — мы его
+не сохраняем. На reconnect auth-сервер видит исходный токен (или null) и может
+выдать новый ws-endpoint на другой ноде. На той ноде нашей dialog-сессии нет:
+- бот не знает контекста → молчит на нажатия кнопок (хотя `result` шлёт);
+- rating падает в пустоту, потому что rate-state живёт на старой ноде.
+
+**Что нужно:**
+
+1. В `LivetexChat` хранить `String? _lastVisitorToken` (in-memory достаточно).
+   После каждого успешного auth обновлять его из `auth.visitorToken`.
+2. В `_openSession()` передавать `visitorToken: _lastVisitorToken ?? config.visitorToken`,
+   а не голый `config.visitorToken`.
+3. (Опционально, но желательно) добавить callback в `LivetexChatConfig`:
+   ```dart
+   Future<String?> Function()? loadPersistedVisitorToken;
+   Future<void> Function(String token)? savePersistedVisitorToken;
+   ```
+   Тогда host-app сможет сохранить токен между запусками приложения (через
+   `shared_preferences`/`flutter_secure_storage`). Аналог native
+   `Const.KEY_VISITOR_TOKEN` в SharedPreferences.
+
+После #1-2 будет починен reconnect внутри сессии приложения. После #3 — и
+переход между запусками приложения (бот будет помнить визитёра).
+
+---
+
 ## Сводка
 
 | # | Файл/символ | Что сделать |
@@ -132,9 +193,10 @@ command:
 | 1 | `LivetexChat.send{Rating,Attributes,…}` | Возвращать `Future<SendResult>` с success / error |
 | 2 | `ChatMessage.creatorType` | Добавить поле, маппить из `creator.type` visitor-api |
 | 3 | `packages/livetex_chat_ui/pubspec.yaml` | Поменять `git:` на `path: ../livetex_chat` |
+| 4 | `LivetexChat._openSession()` | Сохранять выданный сервером `visitorToken` и переиспользовать его на reconnect (sticky-routing) |
 
 После этих правок я уберу из UI:
-- 10-секундный safety-net в `rating_widget.dart` (станет ненужным после #1);
+- 10-секундный safety-net в `rating_widget.dart` (станет ненужным после #1 — Future вернёт ошибку быстрее, и причина "no reply from server after reconnect" из #4 исчезнет);
 - fragile-проверку `creatorLabel == "Система"` в `message_tile.dart` (после #2).
 
 И добавлю в README инструкцию по локальной разработке `melos bootstrap` (после #3).

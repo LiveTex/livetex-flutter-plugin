@@ -1,5 +1,4 @@
 import "dart:async";
-import "dart:developer" as developer;
 import "dart:io";
 
 import "package:file_picker/file_picker.dart";
@@ -129,7 +128,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   void _wire() {
     _subs.addAll([
       _chat.connectionState.listen((s) async {
-        developer.log("[ui] connectionState=$s", name: "livetex_ui");
         if (!mounted) return;
         setState(() => _conn = s);
         if (s == LivetexConnectionState.connected &&
@@ -325,10 +323,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
   }
 
   void _onPressBotButton(ButtonPayload b) {
-    developer.log(
-      "[ui] pressBot payload=${b.payload} url=${b.url} label=${b.label}",
-      name: "livetex_ui",
-    );
     _chat.pressButton(payload: b.payload);
     final url = b.url;
     if (url == null || url.isEmpty) return;
@@ -410,16 +404,10 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
               expanded: _topRatingExpanded,
               onExpandedChanged: (v) =>
                   setState(() => _topRatingExpanded = v),
-              onSubmit: (value) {
-                developer.log(
-                  "[ui] sendRating(top) type=${topRate.enabledType} value=$value",
-                  name: "livetex_ui",
-                );
-                _chat.sendRating(
-                  rateType: topRate.enabledType!,
-                  value: value,
-                );
-              },
+              onSubmit: (value) => _chat.sendRating(
+                rateType: topRate.enabledType!,
+                value: value,
+              ),
             ),
           Expanded(
             child: GestureDetector(
@@ -440,17 +428,11 @@ class _LivetexChatScreenState extends State<LivetexChatScreen> {
                 bottomRating: showBottomRating
                     ? _BottomRatingDescriptor(
                         rate: stateRate,
-                        onSubmit: (value, comment) {
-                          developer.log(
-                            "[ui] sendRating(bottom) type=${stateRate.enabledType} value=$value comment=$comment",
-                            name: "livetex_ui",
-                          );
-                          _chat.sendRating(
-                            rateType: stateRate.enabledType!,
-                            value: value,
-                            comment: comment,
-                          );
-                        },
+                        onSubmit: (value, comment) => _chat.sendRating(
+                          rateType: stateRate.enabledType!,
+                          value: value,
+                          comment: comment,
+                        ),
                       )
                     : null,
               ),
