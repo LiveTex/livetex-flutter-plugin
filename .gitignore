@@ -35,3 +35,5 @@ coverage.lcov
 **/example/ios/Flutter/Generated.xcconfig
 **/example/ios/Flutter/.last_build_id
 !.gitignore
+# Internal working docs — kept locally, not part of the published package
+docs/

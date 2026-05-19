@@ -1,6 +1,6 @@
 name: livetex_chat
 description: Pure Dart LiveTex chat core over Visitor API (auth, WS, state, reconnect).
-version: 0.1.0
+version: 0.2.0
 publish_to: "none"
 
 environment:

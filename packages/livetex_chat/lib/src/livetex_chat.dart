@@ -287,6 +287,8 @@ final class LivetexChat {
           isVisitor: creator.creatorType == "visitor",
           text: content,
           creatorLabel: _creatorLabel(creator),
+          creatorType: creator.creatorType,
+          avatarUrl: creator.employee?.avatarUrl,
           keyboard: keyboard,
           sendState: ChatMessageSendState.none,
         );
@@ -305,6 +307,8 @@ final class LivetexChat {
           fileName: name,
           fileUrl: url,
           creatorLabel: _creatorLabel(creator),
+          creatorType: creator.creatorType,
+          avatarUrl: creator.employee?.avatarUrl,
           sendState: ChatMessageSendState.none,
         );
         _upsert(row);
@@ -340,7 +344,10 @@ final class LivetexChat {
 
   void sendText(String text) {
     final s = _session;
-    if (s == null) return;
+    if (s == null) {
+      _emitTrace("sendText SKIPPED (no session) text=${text.length}ch");
+      return;
+    }
     final corr = _nextCorrelation("txt");
     final pending = ChatMessage(
       id: "pending:$corr",
@@ -353,7 +360,9 @@ final class LivetexChat {
     _byId[pending.id] = pending;
     _insertSortedId(pending.id);
     _emitMessages();
-    s.sendRawJson(VisitorOutgoing.text(correlationId: corr, content: text));
+    final json = VisitorOutgoing.text(correlationId: corr, content: text);
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void sendTyping() {
@@ -365,7 +374,15 @@ final class LivetexChat {
 
   Future<void> sendFile(File file, {String? logicalName}) async {
     final s = _session;
-    if (s == null) return;
+    if (s == null) {
+      _emitTrace("sendFile SKIPPED (no session) name=$logicalName");
+      return;
+    }
+    _emitTrace(
+      "sendFile start name=${logicalName ?? file.path.split('/').last} "
+      "size=${await file.length()}b "
+      "fileTransferring=${s.auth.settings.fileTransferring}",
+    );
     if (!s.auth.settings.fileTransferring) {
       _registerError(
         const LivetexChatError(
@@ -389,18 +406,23 @@ final class LivetexChat {
     _insertSortedId(pending.id);
     _emitMessages();
     try {
+      _emitTrace("sendFile upload BEGIN corr=$corr");
       final url = await s.uploadMultipartFile(
         file: file,
         filenameSuffixPath: name,
       );
-      s.sendRawJson(
-        VisitorOutgoing.file(
-          correlationId: corr,
-          name: name,
-          url: url.trim(),
-        ),
+      _emitTrace("sendFile upload OK corr=$corr url=$url");
+      final json = VisitorOutgoing.file(
+        correlationId: corr,
+        name: name,
+        url: url.trim(),
       );
+      _emitTrace("ws_out $json");
+      s.sendRawJson(json);
     } on LivetexVisitorUploadException catch (e) {
+      _emitTrace(
+        "sendFile upload FAILED corr=$corr status=${e.statusCode} body=${e.body}",
+      );
       _byId.remove("pending:$corr");
       _order.remove("pending:$corr");
       _emitMessages();
@@ -420,16 +442,22 @@ final class LivetexChat {
     String? comment,
   }) {
     final s = _session;
-    if (s == null) return;
+    if (s == null) {
+      // DIAG: surfaces session loss as a trace event so the on-device log
+      // shows it next to the UI's TOP onSubmit log. Remove once the
+      // closed-dialog rating issue is confirmed/fixed.
+      _emitTrace("sendRating SKIPPED (no session) type=$rateType value=$value");
+      return;
+    }
     final corr = _nextCorrelation("rate");
-    s.sendRawJson(
-      VisitorOutgoing.rating(
-        correlationId: corr,
-        rateType: rateType,
-        value: value,
-        comment: comment,
-      ),
+    final json = VisitorOutgoing.rating(
+      correlationId: corr,
+      rateType: rateType,
+      value: value,
+      comment: comment,
     );
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void sendAttributes({
@@ -451,9 +479,14 @@ final class LivetexChat {
   }
 
   void selectDepartment({required String correlationId, required String id}) {
-    _session?.sendRawJson(
-      VisitorOutgoing.department(correlationId: correlationId, id: id),
-    );
+    final s = _session;
+    if (s == null) {
+      _emitTrace("selectDepartment SKIPPED (no session) id=$id");
+      return;
+    }
+    final json = VisitorOutgoing.department(correlationId: correlationId, id: id);
+    _emitTrace("ws_out $json");
+    s.sendRawJson(json);
   }
 
   void loadHistory({required String messageId, int offset = 0}) {

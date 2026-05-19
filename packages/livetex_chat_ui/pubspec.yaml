@@ -1,6 +1,6 @@
 name: livetex_chat_ui
 description: Drop-in LiveTex chat UI (Material 3) built on livetex_chat.
-version: 0.1.0
+version: 0.2.0
 publish_to: "none"
 
 environment:
@@ -16,11 +16,24 @@ dependencies:
       path: packages/livetex_chat
   cached_network_image: ^3.4.1
   file_picker: ^8.1.7
+  flutter_cache_manager: ^3.4.1
   intl: ^0.19.0
   url_launcher: ^6.3.1
-  path_provider: ^2.1.5
-  share_plus: ^10.1.4
   photo_view: ^0.15.0
+  # share_plus needed for "Save image" in the full-screen image viewer —
+  # opens the system share sheet so the user can save to gallery / share
+  # with another app, matching native sdk-ui behavior (Android:
+  # DownloadManager → Pictures, iOS: UIActivityViewController).
+  share_plus: ^10.1.4
+
+# DIAG override — picks up the local outbound-trace patch in
+# packages/livetex_chat/lib/src/livetex_chat.dart so on-device logs show
+# whether sendRating actually reaches the WebSocket sink (vs silent
+# no-op from a null _session). Remove together with the trace patch
+# once the closed-dialog rating issue is diagnosed.
+dependency_overrides:
+  livetex_chat:
+    path: ../livetex_chat
 
 dev_dependencies:
   flutter_lints: ^4.0.0

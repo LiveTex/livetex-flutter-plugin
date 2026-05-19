@@ -3,6 +3,7 @@ import "dart:convert";
 import "dart:io";
 
 import "package:http/http.dart" as http;
+import "package:web_socket_channel/io.dart";
 import "package:web_socket_channel/web_socket_channel.dart";
 
 import "auth_result.dart";
@@ -186,7 +187,17 @@ final class LivetexVisitorSession {
     void Function(String inboundJson)? onInboundText,
   }) {
     final uri = Uri.parse(auth.endpoints.ws);
-    final channel = WebSocketChannel.connect(uri);
+    // Matches native sdk-android `OkHttpManager.WEBSOCKET_PING_INTERVAL = 10s`.
+    // Without it the socket can be silently torn down by an intermediate
+    // proxy idle-timeout (Cloudflare / NAT / mobile carrier — typically
+    // 60-120s) and `sink.add()` would push frames into a drained
+    // connection. With pingInterval, dart:io WebSocket aborts the
+    // connection when no pong arrives, `onDone` fires, and the existing
+    // `_scheduleReconnect` kicks in.
+    final channel = IOWebSocketChannel.connect(
+      uri,
+      pingInterval: const Duration(seconds: 10),
+    );
     final session = LivetexVisitorSession._(auth, channel);
     session._socketSub = channel.stream.listen(
       (event) {
