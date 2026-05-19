@@ -1,5 +1,8 @@
+import "dart:math" as math;
+
 import "package:cached_network_image/cached_network_image.dart";
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 import "package:flutter_cache_manager/flutter_cache_manager.dart";
 import "package:intl/intl.dart";
 import "package:livetex_chat/livetex_chat.dart";
@@ -42,9 +45,16 @@ bool _isImageUrl(String? u) {
 /// One chat message — visitor / employee / bot / system. System messages
 /// render as a centered gray line without a bubble.
 class MessageTile extends StatelessWidget {
-  const MessageTile({super.key, required this.message});
+  const MessageTile({super.key, required this.message, this.onQuote});
 
   final ChatMessage message;
+
+  /// Called when the user picks "Цитировать" from the long-press menu.
+  /// Receives the text that should be inserted as the quote source — for
+  /// quote-reply messages we pass only the body (strip the existing
+  /// `"> ...\n"` prefix), mirroring native `MessageActionsDialog → onQuote`
+  /// using already-parsed `ChatItem.content`.
+  final ValueChanged<String>? onQuote;
 
   bool get _isSystem => message.creatorType == "system";
 
@@ -104,6 +114,10 @@ class MessageTile extends StatelessWidget {
                     fileUrl: message.fileUrl,
                     isImage: isImage,
                     isFile: isFile,
+                    // Short tap on text → action menu. Long press is left to
+                    // `SelectableText` so the system text-selection handles
+                    // come up as usual.
+                    onShowActions: () => _showMessageActions(context),
                   ),
                 ),
               ),
@@ -120,54 +134,140 @@ class MessageTile extends StatelessWidget {
       ),
     );
   }
+
+  /// Returns text suitable for copy/quote actions: file-only messages
+  /// fall back to the filename or URL, quote-reply messages return the
+  /// body (without the `"> ...\n"` prefix) to match native behavior.
+  String? _actionableContent() {
+    final raw = message.text;
+    if (raw != null && raw.isNotEmpty) {
+      final parts = _splitQuote(raw);
+      return parts?.body ?? raw;
+    }
+    if (message.fileName != null && message.fileName!.isNotEmpty) {
+      return message.fileName;
+    }
+    return message.fileUrl;
+  }
+
+  Future<void> _showMessageActions(BuildContext context) async {
+    final content = _actionableContent();
+    if (content == null || content.isEmpty) return;
+    final theme = LivetexChatTheme.of(context);
+    final action = await showModalBottomSheet<_MessageAction>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(theme.cardRadius),
+        ),
+      ),
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.copy_outlined),
+              title: const Text("Скопировать"),
+              onTap: () => Navigator.pop(ctx, _MessageAction.copy),
+            ),
+            if (onQuote != null)
+              ListTile(
+                leading: const Icon(Icons.format_quote_outlined),
+                title: const Text("Цитировать"),
+                onTap: () => Navigator.pop(ctx, _MessageAction.quote),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (action == null) return;
+    switch (action) {
+      case _MessageAction.copy:
+        await Clipboard.setData(ClipboardData(text: content));
+        if (context.mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(
+              content: Text("Скопировано в буфер обмена"),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      case _MessageAction.quote:
+        onQuote?.call(content);
+    }
+  }
 }
+
+enum _MessageAction { copy, quote }
 
 /// Renders message text; if it starts with a "> quoted line\n" prefix,
 /// renders the quoted line as an inline quote block (vertical accent bar
 /// + dimmed text) above the actual message body. Same content shape as
 /// native sdk-android `ChatItem.findQuotedText`.
 class _TextWithOptionalQuote extends StatelessWidget {
-  const _TextWithOptionalQuote({required this.text, required this.fg});
+  const _TextWithOptionalQuote({
+    required this.text,
+    required this.fg,
+    this.onTap,
+  });
 
   final String text;
   final Color fg;
+
+  /// Short tap on text → opens the action menu (Copy / Quote). Long-press
+  /// stays with `SelectableText` so the OS text-selection handles still
+  /// work — `SelectableText.onTap` does not interfere with selection.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
     final parts = _splitQuote(text);
     if (parts == null) {
-      return SelectableText(text, style: TextStyle(fontSize: 16, color: fg));
+      return SelectableText(
+        text,
+        onTap: onTap,
+        style: TextStyle(fontSize: 16, color: fg),
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(width: 2, color: theme.quoteAccent),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  parts.quote,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: fg.withValues(alpha: 0.75),
+        // The quoted strip is non-selectable — a tap there just opens the
+        // menu, matching native where the quote header is decorative.
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(width: 2, color: theme.quoteAccent),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    parts.quote,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: fg.withValues(alpha: 0.75),
+                    ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         if (parts.body.isNotEmpty) ...[
           const SizedBox(height: 6),
           SelectableText(
             parts.body,
+            onTap: onTap,
             style: TextStyle(fontSize: 16, color: fg),
           ),
         ],
@@ -267,6 +367,7 @@ class _MessageBubble extends StatelessWidget {
     required this.fileUrl,
     required this.isImage,
     required this.isFile,
+    this.onShowActions,
   });
 
   final bool isVisitor;
@@ -275,6 +376,7 @@ class _MessageBubble extends StatelessWidget {
   final String? fileUrl;
   final bool isImage;
   final bool isFile;
+  final VoidCallback? onShowActions;
 
   @override
   Widget build(BuildContext context) {
@@ -284,11 +386,17 @@ class _MessageBubble extends StatelessWidget {
     final imageUrl = isImage
         ? (fileUrl ?? (_isImageUrl(text) ? text : null))
         : null;
-    return Material(
-      color: bg,
-      borderRadius: BorderRadius.circular(theme.bubbleRadius),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+    // Adaptive radius: a flat `borderRadius` of 30 turns short 2-line
+    // bubbles into balls when content width ≈ height ≈ 2*radius. Clamp to
+    // half of the smaller side so the rounding caps out at "stadium /
+    // capsule" instead of "circle", while taller bubbles keep the full
+    // 30px corners that match native sdk-ui drawables.
+    return ClipPath(
+      clipper: _AdaptiveBubbleClipper(theme.bubbleRadius),
+      child: ColoredBox(
+        color: bg,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -330,6 +438,7 @@ class _MessageBubble extends StatelessWidget {
             else if (isFile && fileName != null)
               InkWell(
                 onTap: () => _openFileUrl(context, fileUrl),
+                onLongPress: onShowActions,
                 borderRadius: BorderRadius.circular(8),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -355,8 +464,13 @@ class _MessageBubble extends StatelessWidget {
                 ),
               )
             else if (text != null && text!.isNotEmpty)
-              _TextWithOptionalQuote(text: text!, fg: fg),
+              _TextWithOptionalQuote(
+                text: text!,
+                fg: fg,
+                onTap: onShowActions,
+              ),
           ],
+        ),
         ),
       ),
     );
@@ -540,4 +654,24 @@ const _ruMonths = <String>[
 String _ruMonth(int m) {
   if (m < 1 || m > 12) return "";
   return _ruMonths[m];
+}
+
+/// Bubble clip with corner radius clamped to `min(maxRadius, height/2,
+/// width/2)`. Used by `_MessageBubble` so short multi-line messages don't
+/// degenerate into circles while taller bubbles keep the native 30px look.
+class _AdaptiveBubbleClipper extends CustomClipper<Path> {
+  const _AdaptiveBubbleClipper(this.maxRadius);
+
+  final double maxRadius;
+
+  @override
+  Path getClip(Size size) {
+    final r = math.min(maxRadius, math.min(size.width, size.height) / 2);
+    final rect = Offset.zero & size;
+    return Path()..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(r)));
+  }
+
+  @override
+  bool shouldReclip(_AdaptiveBubbleClipper oldClipper) =>
+      oldClipper.maxRadius != maxRadius;
 }

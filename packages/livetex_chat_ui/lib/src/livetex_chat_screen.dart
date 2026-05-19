@@ -120,6 +120,12 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
   final List<_PendingBottom> _bottomQueue = [];
   List<DepartmentItem> _pendingDepartments = const [];
 
+  /// Quoted message text the user picked via long-press → "Цитировать".
+  /// When non-null, the next outgoing text is prefixed with `"> $_quoteText\n"`
+  /// before being sent — matches native
+  /// `ChatState.createNewTextMessage(text, quoteText)`.
+  String? _quoteText;
+
   @override
   void initState() {
     super.initState();
@@ -372,8 +378,20 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       );
       return;
     }
+    final q = _quoteText;
+    final payload = (q == null || q.isEmpty) ? t : "> $q\n$t";
     _textCtrl.clear();
-    _chat.sendText(t);
+    if (q != null) setState(() => _quoteText = null);
+    _chat.sendText(payload);
+  }
+
+  void _setQuote(String text) {
+    setState(() => _quoteText = text);
+  }
+
+  void _clearQuote() {
+    if (_quoteText == null) return;
+    setState(() => _quoteText = null);
   }
 
   void _onComposerChanged(String s) {
@@ -384,13 +402,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       _lastTypingSent = now;
       _chat.sendTyping();
     }
-  }
-
-  void _maybeLoadHistory() {
-    if (_messages.isEmpty) return;
-    final oldest =
-        _messages.reduce((a, b) => a.createdAt.isBefore(b.createdAt) ? a : b);
-    _chat.loadHistory(messageId: oldest.id, offset: 20);
   }
 
   void _submitAttributes({String? name, String? phone, String? email}) {
@@ -485,15 +496,8 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
         elevation: 0,
         centerTitle: true,
         title: Text(widget.title),
-        actions: [
-          IconButton(
-            tooltip: "История",
-            onPressed: _conn == LivetexConnectionState.connected
-                ? _maybeLoadHistory
-                : null,
-            icon: const Icon(Icons.history),
-          ),
-        ],
+        // No manual history button — paging is expected to come from a
+        // scroll-to-top listener (see UI TODO in docs/CORE_TODOS.md).
       ),
       body: Column(
         children: [
@@ -527,6 +531,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
                 typingVisible: _typingVisible,
                 operatorName: d?.employee?.name,
                 onPressBotButton: _onPressBotButton,
+                onQuote: _setQuote,
                 bottomRating: showBottomRating
                     ? _BottomRatingDescriptor(
                         rate: stateRate,
@@ -572,6 +577,8 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       onChanged: _onComposerChanged,
       onAttach: _pickAndSendFile,
       enabled: _conn == LivetexConnectionState.connected,
+      quoteText: _quoteText,
+      onClearQuote: _clearQuote,
     );
   }
 }
@@ -590,6 +597,7 @@ class _MessageList extends StatelessWidget {
     required this.typingVisible,
     required this.operatorName,
     required this.onPressBotButton,
+    required this.onQuote,
     required this.bottomRating,
   });
 
@@ -598,6 +606,7 @@ class _MessageList extends StatelessWidget {
   final bool typingVisible;
   final String? operatorName;
   final void Function(ButtonPayload) onPressBotButton;
+  final ValueChanged<String> onQuote;
   final _BottomRatingDescriptor? bottomRating;
 
   @override
@@ -607,6 +616,7 @@ class _MessageList extends StatelessWidget {
       typingVisible,
       operatorName,
       onPressBotButton,
+      onQuote,
     );
     if (bottomRating != null) {
       items.add(
@@ -631,6 +641,7 @@ List<Widget> _buildItems(
   bool typingVisible,
   String? operatorName,
   void Function(ButtonPayload) onPressBotButton,
+  ValueChanged<String> onQuote,
 ) {
   final out = <Widget>[];
   DateTime? prevDay;
@@ -642,7 +653,7 @@ List<Widget> _buildItems(
       out.add(DateSeparator(date: local));
       prevDay = day;
     }
-    out.add(MessageTile(message: m));
+    out.add(MessageTile(message: m, onQuote: onQuote));
     // Bot keyboard rendered as a separate, full-width component below the
     // message bubble (mirrors native `buttonsContainerView` in
     // `i_chat_message_in.xml`).
