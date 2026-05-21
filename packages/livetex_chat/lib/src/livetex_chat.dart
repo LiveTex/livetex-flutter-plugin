@@ -20,6 +20,9 @@ final class LivetexChat {
   final LivetexChatConfig config;
   final http.Client? _http;
   String? _deviceTokenOverride;
+  /// Серверный visitorToken последнего успешного auth. Переиспользуется на
+  /// реконнектах — без этого sticky-routing рвётся и бот теряет контекст.
+  String? _lastVisitorToken;
   LivetexVisitorSession? _session;
   StreamSubscription<VisitorServerMessage>? _msgSub;
   int _corrSeq = 0;
@@ -124,7 +127,7 @@ final class LivetexChat {
         authEndpoint: config.resolveAuthEndpoint(),
         touchPoint: config.touchPoint,
         httpClient: _http,
-        visitorToken: config.visitorToken,
+        visitorToken: _lastVisitorToken ?? config.visitorToken,
         customVisitorToken: config.customVisitorToken,
         deviceToken: _deviceTokenOverride ?? config.deviceToken,
         deviceType: resolveLivetexVisitorDeviceType(config.deviceType),
@@ -142,8 +145,10 @@ final class LivetexChat {
       );
       _backoffSec = 3;
       _setConn(LivetexConnectionState.connected);
+      _lastVisitorToken = _session!.auth.visitorToken;
       _emitTrace("connected");
     } on LivetexVisitorAuthException catch (e) {
+      _lastVisitorToken = null;
       _setConn(LivetexConnectionState.disconnected);
       _registerError(
         LivetexChatError(
