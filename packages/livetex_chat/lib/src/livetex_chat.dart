@@ -105,13 +105,13 @@ final class LivetexChat {
   }
 
   Future<void> connect() async {
+    _disconnectRequested = false;
     // Идемпотентность: lifecycle (push) и UI-обсервер могут дёргать connect()
     // параллельно. Если подключение уже идёт — не запускаем вторую сессию.
     if (_connNow == LivetexConnectionState.connecting ||
         _connNow == LivetexConnectionState.reconnecting) {
       return;
     }
-    _disconnectRequested = false;
     if (!_visitorTokenLoaded) {
       _visitorTokenLoaded = true;
       _lastVisitorToken ??= await config.loadVisitorToken?.call();
@@ -161,8 +161,9 @@ final class LivetexChat {
       if (saveCb != null) {
         try {
           await saveCb(_lastVisitorToken!);
-        } catch (_) {
+        } catch (e) {
           // Сбой хранилища хоста не должен ронять соединение.
+          _emitTrace("saveVisitorToken failed: $e");
         }
       }
       _emitTrace("connected");
