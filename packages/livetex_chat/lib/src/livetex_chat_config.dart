@@ -47,8 +47,11 @@ final class LivetexChatConfig {
   final bool traceRedactTokens;
 
   /// Вызывается один раз на первом `connect()` — вернуть ранее сохранённый
-  /// visitorToken или null для нового визитёра. Хост обычно читает из
-  /// shared_preferences / flutter_secure_storage.
+  /// visitorToken или null для нового визитёра.
+  ///
+  /// `visitorToken` — это session-credential (уходит как `Authorization:
+  /// Bearer`), поэтому для продакшена рекомендуется `flutter_secure_storage`
+  /// (Keychain / Android Keystore), а не `shared_preferences` (plaintext).
   ///
   /// Приоритет: непустой результат `loadVisitorToken` имеет приоритет над
   /// `visitorToken`, заданным в конфиге напрямую.
@@ -56,6 +59,7 @@ final class LivetexChatConfig {
 
   /// Вызывается после каждого успешного auth — хост сохраняет `token` в своё
   /// постоянное хранилище. Без него токен живёт только в рамках процесса.
+  /// Хранилище — см. рекомендацию в [loadVisitorToken].
   final Future<void> Function(String token)? saveVisitorToken;
 
   Uri resolveAuthEndpoint() {
