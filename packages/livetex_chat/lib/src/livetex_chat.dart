@@ -137,6 +137,7 @@ final class LivetexChat {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     try {
+      _markPendingAsFailed();
       await _msgSub?.cancel();
       _msgSub = null;
       try {
@@ -205,6 +206,7 @@ final class LivetexChat {
   void _onSocketDone() {
     if (_disconnectRequested) return;
     _emitTrace("ws_done");
+    _markPendingAsFailed();
     _setConn(LivetexConnectionState.disconnected);
     _scheduleReconnect();
   }
@@ -384,6 +386,23 @@ final class LivetexChat {
 
   void _emitMessages() {
     if (!_messagesCtrl.isClosed) _messagesCtrl.add(_snapshotMessages());
+  }
+
+  /// Помечает оптимистичные `pending:*` сообщения, всё ещё в `sending`, как
+  /// `failed`. Зовётся при разрыве/пересоздании сессии — `result` для них уже
+  /// не придёт (старая подписка мертва), иначе спиннер висит вечно.
+  void _markPendingAsFailed() {
+    var changed = false;
+    for (final id in _byId.keys.toList()) {
+      final msg = _byId[id];
+      if (id.startsWith("pending:") &&
+          msg != null &&
+          msg.sendState == ChatMessageSendState.sending) {
+        _byId[id] = msg.copyWith(sendState: ChatMessageSendState.failed);
+        changed = true;
+      }
+    }
+    if (changed) _emitMessages();
   }
 
   void sendRawJson(String json) => _session?.sendRawJson(json);
