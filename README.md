@@ -1,6 +1,6 @@
 # livetex-flutter-plugin
 
-Dart `>=3.4`. Flutter `>=3.16` для UI и push.
+Dart `>=3.6`. Flutter `>=3.27` для UI и push (стек Firebase Messaging 16.x).
 
 ```yaml
 dependencies:

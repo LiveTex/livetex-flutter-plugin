@@ -552,7 +552,9 @@ class _MessageBubble extends StatelessWidget {
       // Image is already in the CachedNetworkImage cache from rendering,
       // so this hits disk without an extra HTTP request in the common case.
       final file = await DefaultCacheManager().getSingleFile(url);
-      await Share.shareXFiles([XFile(file.path)]);
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)]),
+      );
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(content: Text("Не удалось сохранить изображение: $e")),

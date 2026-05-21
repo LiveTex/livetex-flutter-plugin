@@ -2,7 +2,7 @@
 ///
 /// Low-level entry points: [livetexVisitorAuthenticate], [LivetexVisitorSession],
 /// [VisitorOutgoing], [parseServerMessage].
-library livetex_chat;
+library;
 
 export "src/api/auth_result.dart";
 export "src/api/json_utils.dart" show tryParseServerDate;
