@@ -105,6 +105,12 @@ final class LivetexChat {
   }
 
   Future<void> connect() async {
+    // Идемпотентность: lifecycle (push) и UI-обсервер могут дёргать connect()
+    // параллельно. Если подключение уже идёт — не запускаем вторую сессию.
+    if (_connNow == LivetexConnectionState.connecting ||
+        _connNow == LivetexConnectionState.reconnecting) {
+      return;
+    }
     _disconnectRequested = false;
     if (!_visitorTokenLoaded) {
       _visitorTokenLoaded = true;
