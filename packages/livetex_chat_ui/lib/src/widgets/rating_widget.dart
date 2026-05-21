@@ -1,5 +1,3 @@
-import "dart:async";
-
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 
@@ -11,6 +9,12 @@ const _kTopPanelTitle = "Оцените качество обслуживани�
 const _kCommentHint = "Комментарий (не обязательно)";
 const _kSubmitLabel = "ОЦЕНИТЬ";
 const _kCommentMaxLength = 1000;
+
+String _ratingErrorText(SendResult result) => switch (result) {
+      SendNotConnected() => "Нет соединения. Оценка не отправлена.",
+      SendError() => "Не удалось отправить оценку. Попробуйте ещё раз.",
+      _ => "Не удалось подтвердить оценку. Попробуйте ещё раз.",
+    };
 
 /// Top rating panel (sticky at the top of the chat).
 ///
@@ -38,7 +42,7 @@ class TopRatingPanel extends StatefulWidget {
   final bool expanded;
   final ValueChanged<bool> onExpandedChanged;
 
-  final void Function(String value) onSubmit;
+  final Future<SendResult> Function(String value) onSubmit;
 
   @override
   State<TopRatingPanel> createState() => _TopRatingPanelState();
@@ -52,8 +56,6 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
   bool get _isDoublePoint => widget.rate.enabledType == "doublePoint";
 
-  Timer? _submitTimeout;
-
   @override
   void didUpdateWidget(covariant TopRatingPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -62,7 +64,6 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     final wasSet = oldWidget.rate.isSet?.value;
     final nowSet = widget.rate.isSet?.value;
     if (wasSet != nowSet && nowSet != null && _submitting) {
-      _submitTimeout?.cancel();
       _submitting = false;
       _picked = -1;
       // Defer the parent setState — calling onExpandedChanged synchronously
@@ -81,7 +82,6 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     }
     // enabledType changed — reset selection per §4.4.
     if (oldWidget.rate.enabledType != widget.rate.enabledType) {
-      _submitTimeout?.cancel();
       _picked = -1;
       _submitting = false;
     }
@@ -89,7 +89,6 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
 
   @override
   void dispose() {
-    _submitTimeout?.cancel();
     super.dispose();
   }
 
@@ -99,22 +98,20 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     return false;
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_canSubmit) return;
     setState(() => _submitting = true);
-    widget.onSubmit(_picked.toString());
-    _submitTimeout?.cancel();
-    // Safety net: if the server never confirms, unblock the UI so the user
-    // can retry. The actual submission may still have succeeded on the wire.
-    _submitTimeout = Timer(const Duration(seconds: 10), () {
-      if (!mounted || !_submitting) return;
-      setState(() => _submitting = false);
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text("Не удалось подтвердить оценку. Попробуйте ещё раз."),
-        ),
-      );
-    });
+    final result = await widget.onSubmit(_picked.toString());
+    // didUpdateWidget may have already cleared _submitting on the rate.isSet
+    // transition while we were awaiting — in that case do nothing.
+    if (!mounted || !_submitting) return;
+    // SendSuccess: server accepted; the rate.isSet dialogState update will
+    // collapse the panel via didUpdateWidget — keep the submitting lock.
+    if (result is SendSuccess) return;
+    setState(() => _submitting = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(_ratingErrorText(result))),
+    );
   }
 
   int _isSetValue() {
@@ -221,7 +218,7 @@ class BottomRatingForm extends StatefulWidget {
   });
 
   final DialogRateState rate;
-  final void Function(String value, String? comment) onSubmit;
+  final Future<SendResult> Function(String value, String? comment) onSubmit;
 
   @override
   State<BottomRatingForm> createState() => _BottomRatingFormState();
@@ -230,7 +227,6 @@ class BottomRatingForm extends StatefulWidget {
 class _BottomRatingFormState extends State<BottomRatingForm> {
   int _picked = -1;
   bool _submitting = false;
-  Timer? _submitTimeout;
   final TextEditingController _comment = TextEditingController();
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
@@ -247,7 +243,6 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     super.didUpdateWidget(oldWidget);
     // enabledType changed in-place — reset per §3.6.
     if (oldWidget.rate.enabledType != widget.rate.enabledType) {
-      _submitTimeout?.cancel();
       _picked = -1;
       _submitting = false;
     }
@@ -255,33 +250,27 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     final wasSet = oldWidget.rate.isSet?.value;
     final nowSet = widget.rate.isSet?.value;
     if (wasSet != nowSet && nowSet != null && _submitting) {
-      _submitTimeout?.cancel();
       _submitting = false;
     }
   }
 
   @override
   void dispose() {
-    _submitTimeout?.cancel();
     _comment.dispose();
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_canSubmit) return;
     final c = _comment.text.trim();
     setState(() => _submitting = true);
-    widget.onSubmit(_picked.toString(), c.isEmpty ? null : c);
-    _submitTimeout?.cancel();
-    _submitTimeout = Timer(const Duration(seconds: 10), () {
-      if (!mounted || !_submitting) return;
-      setState(() => _submitting = false);
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text("Не удалось подтвердить оценку. Попробуйте ещё раз."),
-        ),
-      );
-    });
+    final result = await widget.onSubmit(_picked.toString(), c.isEmpty ? null : c);
+    if (!mounted || !_submitting) return;
+    if (result is SendSuccess) return;
+    setState(() => _submitting = false);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(_ratingErrorText(result))),
+    );
   }
 
   @override

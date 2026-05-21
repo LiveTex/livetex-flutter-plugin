@@ -732,7 +732,7 @@ class _BottomRatingDescriptor {
   const _BottomRatingDescriptor({required this.rate, required this.onSubmit});
 
   final DialogRateState rate;
-  final void Function(String value, String? comment) onSubmit;
+  final Future<SendResult> Function(String value, String? comment) onSubmit;
 }
 
 class _MessageList extends StatelessWidget {
