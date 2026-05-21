@@ -23,6 +23,7 @@ final class LivetexChat {
   /// Серверный visitorToken последнего успешного auth. Переиспользуется на
   /// реконнектах — без этого sticky-routing рвётся и бот теряет контекст.
   String? _lastVisitorToken;
+  bool _visitorTokenLoaded = false;
   LivetexVisitorSession? _session;
   StreamSubscription<VisitorServerMessage>? _msgSub;
   int _corrSeq = 0;
@@ -105,6 +106,10 @@ final class LivetexChat {
 
   Future<void> connect() async {
     _disconnectRequested = false;
+    if (!_visitorTokenLoaded) {
+      _visitorTokenLoaded = true;
+      _lastVisitorToken ??= await config.loadVisitorToken?.call();
+    }
     await _openSession();
   }
 
@@ -146,6 +151,14 @@ final class LivetexChat {
       _backoffSec = 3;
       _setConn(LivetexConnectionState.connected);
       _lastVisitorToken = _session!.auth.visitorToken;
+      final saveCb = config.saveVisitorToken;
+      if (saveCb != null) {
+        try {
+          await saveCb(_lastVisitorToken!);
+        } catch (_) {
+          // Сбой хранилища хоста не должен ронять соединение.
+        }
+      }
       _emitTrace("connected");
     } on LivetexVisitorAuthException catch (e) {
       _lastVisitorToken = null;
