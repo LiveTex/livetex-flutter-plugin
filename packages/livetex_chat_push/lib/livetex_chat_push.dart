@@ -37,7 +37,7 @@ Future<void> livetexFirebaseBackgroundHandler(RemoteMessage message) async {
   if (Firebase.apps.isEmpty) {
     await Firebase.initializeApp();
   }
-  final text = message.data["text"];
+  final text = message.data["text"] ?? message.notification?.body;
   if (text == null || text.isEmpty) return;
   final plugin = FlutterLocalNotificationsPlugin();
   await plugin.initialize(_localInitSettings);
@@ -101,7 +101,14 @@ class LivetexChatPush with WidgetsBindingObserver {
     );
 
     final initial = await messaging.getInitialMessage();
-    if (initial != null) onNotificationTap?.call();
+    if (initial != null) {
+      // Cold start from a tapped notification: during initialize() the host's
+      // navigator is not mounted yet, so calling onNotificationTap now is lost.
+      // Defer to after the first frame.
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => onNotificationTap?.call(),
+      );
+    }
 
     WidgetsBinding.instance.addObserver(this);
   }
@@ -111,9 +118,18 @@ class LivetexChatPush with WidgetsBindingObserver {
   /// тогда повтор произойдёт на ближайшем `resumed` (см. lifecycle).
   Future<void> _refreshDeviceToken() async {
     final messaging = FirebaseMessaging.instance;
-    final String? token;
+    String? token;
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       token = await messaging.getAPNSToken();
+      // APNS-токен бывает не готов сразу после запуска приложения. Короткий
+      // ограниченный ретрай — иначе при foreground-only первом запуске токен
+      // не зарегистрируется вовсе (`resumed` не выстреливает).
+      var attempts = 0;
+      while ((token == null || token.isEmpty) && attempts < 5) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        token = await messaging.getAPNSToken();
+        attempts++;
+      }
     } else {
       token = await messaging.getToken();
     }
