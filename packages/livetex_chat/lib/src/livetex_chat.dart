@@ -138,6 +138,7 @@ final class LivetexChat {
     _reconnectTimer = null;
     try {
       _markPendingAsFailed();
+      final wasConnected = _session != null;
       await _msgSub?.cancel();
       _msgSub = null;
       try {
@@ -145,9 +146,9 @@ final class LivetexChat {
       } catch (_) {}
       _session = null;
       _setConn(
-        _session == null
-            ? LivetexConnectionState.connecting
-            : LivetexConnectionState.reconnecting,
+        wasConnected
+            ? LivetexConnectionState.reconnecting
+            : LivetexConnectionState.connecting,
       );
       _emitTrace("connect");
       try {
