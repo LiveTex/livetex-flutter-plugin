@@ -269,7 +269,12 @@ final class LivetexVisitorSession {
       if (streamed.statusCode != 200) {
         throw LivetexVisitorUploadException(streamed.statusCode, body);
       }
-      return body;
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic> && decoded["url"] is String) {
+        return decoded["url"] as String;
+      }
+      // Fallback: some environments may answer with a plain URL string.
+      return body.trim();
     } finally {
       if (ownClient) client.close();
     }
