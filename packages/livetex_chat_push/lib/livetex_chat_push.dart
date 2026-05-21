@@ -153,6 +153,7 @@ class LivetexChatPush with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    chat.config.trace?.call(livetexTraceFormatLine("lifecycle: ${state.name}"));
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
