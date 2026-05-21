@@ -49,6 +49,9 @@ final class LivetexChatConfig {
   /// Вызывается один раз на первом `connect()` — вернуть ранее сохранённый
   /// visitorToken или null для нового визитёра. Хост обычно читает из
   /// shared_preferences / flutter_secure_storage.
+  ///
+  /// Приоритет: непустой результат `loadVisitorToken` имеет приоритет над
+  /// `visitorToken`, заданным в конфиге напрямую.
   final Future<String?> Function()? loadVisitorToken;
 
   /// Вызывается после каждого успешного auth — хост сохраняет `token` в своё
