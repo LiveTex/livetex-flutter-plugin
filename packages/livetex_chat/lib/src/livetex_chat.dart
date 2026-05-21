@@ -219,9 +219,15 @@ final class LivetexChat {
     _setConn(LivetexConnectionState.disconnected);
   }
 
-  /// Updates push token for the next auth / reconnect cycle.
+  /// Обновляет push-токен. Если сокет уже подключён и токен изменился —
+  /// переавторизуется (реконнект) с новым `deviceToken`, иначе токен
+  /// подхватит ближайший `connect()`.
   void updateDeviceToken(String? token) {
+    if (token == _deviceTokenOverride) return;
     _deviceTokenOverride = token;
+    if (isConnected) {
+      unawaited(_openSession());
+    }
   }
 
   void _onServerMessage(VisitorServerMessage m) {
