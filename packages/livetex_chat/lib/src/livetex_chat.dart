@@ -107,12 +107,17 @@ final class LivetexChat {
 
   Future<void> connect() async {
     _disconnectRequested = false;
-    // Идемпотентность: lifecycle (push) и UI-обсервер могут дёргать connect()
-    // параллельно. Если подключение уже идёт — не запускаем вторую сессию.
-    if (_connNow == LivetexConnectionState.connecting ||
+    // Идемпотентность: если уже подключены или подключение идёт — не
+    // открываем новую сессию. Без проверки `connected` каждый resumed-эвент
+    // жизненного цикла дёргал бы полный реконнект (и бэкенд не успевал бы
+    // увидеть «нет сокета» для отправки push).
+    if (isConnected ||
+        _connNow == LivetexConnectionState.connecting ||
         _connNow == LivetexConnectionState.reconnecting) {
+      _emitTrace("connect() noop (conn=$_connNow)");
       return;
     }
+    _emitTrace("connect() requested (conn=$_connNow)");
     if (!_visitorTokenLoaded) {
       _visitorTokenLoaded = true;
       _lastVisitorToken ??= await config.loadVisitorToken?.call();
@@ -216,6 +221,7 @@ final class LivetexChat {
   }
 
   Future<void> disconnect() async {
+    _emitTrace("disconnect() requested");
     _disconnectRequested = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -235,6 +241,7 @@ final class LivetexChat {
     if (token == _deviceTokenOverride) return;
     _deviceTokenOverride = token;
     if (isConnected) {
+      _emitTrace("updateDeviceToken changed → reauth");
       unawaited(_openSession());
     }
   }
