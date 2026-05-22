@@ -2,6 +2,10 @@
 
 Dart `>=3.6`. Flutter `>=3.27` для UI и push (стек Firebase Messaging 16.x).
 
+## Документация
+
+- [Настройка push-уведомлений](PUSH_INTEGRATION.md)
+
 ```yaml
 dependencies:
   livetex_chat:
