@@ -1,6 +1,4 @@
-# Push — дополнение к README
-
-Базовый код (`livetexSetupPush`, `LivetexChat`, `LivetexChatPush`, конфиг) — в [README.md](README.md).
+# Push — дополнение к [README.md](README.md)
 
 ---
 
@@ -10,34 +8,22 @@
 - `LivetexChatPush` при сворачивании вызывает `chat.disconnect()` → LiveTex шлёт push, только если у визитёра **нет активного WebSocket**.
 - Экран чата закрыт, приложение на переднем плане — **не push**; слушайте `chat.messages`, свой in-app индикатор.
 
-**Кто доставляет push оператору (настраивается у LiveTex):**
-
-
-|                      | A. Свой сервер | B. LiveTex                                 |
-| -------------------- | -------------- | ------------------------------------------ |
-| Кто шлёт             | Ваш бэкенд     | LiveTex (FCM / APNS)                       |
-| Что передать LiveTex | URL вебхука    | FCM service-account JSON и/или APNS `.p12` |
-
-
-Код в приложении одинаковый — device-token уходит в LiveTex через SDK.
-
-**Вебхук LiveTex → ваш сервер (вариант A):**
-
-
-| Поле       | Описание                       |
-| ---------- | ------------------------------ |
-| `version`  | `"1"`                          |
-| `platform` | `ios` / `android`              |
-| `to`       | FCM- или APNS-токен устройства |
-| `text`     | текст сообщения (опц.)         |
-| `url`      | ссылка на файл (опц.)          |
-
+Push на устройство доставляет **LiveTex** (FCM / APNS). Ключи передаёте на **[support@livetex.ru](mailto:support@livetex.ru)** — см. таблицы ниже.
 
 ---
 
-## Навигация
+## Как открыть экран чата
 
-**Кнопка «Открыть чат»** — есть `BuildContext`:
+В README у `LivetexChatPush` указано `onNotificationTap: openChat`. Эта функция должна показать `LivetexChatScreen` — **тот же экран**, что и при обычном входе в чат из вашего UI.
+
+Два входа — два способа навигации:
+
+| Откуда | Почему |
+| --- | --- |
+| Кнопка / пункт меню в приложении | Есть `context` виджета → обычный `Navigator` |
+| Тап по push-уведомлению | `context` часто нет (фон, cold start) → `GlobalKey<NavigatorState>` на `MaterialApp` |
+
+**Из UI приложения:**
 
 ```dart
 Navigator.of(context).push(
@@ -47,7 +33,7 @@ Navigator.of(context).push(
 );
 ```
 
-**Тап по push** (`onNotificationTap`) — `context` часто нет → `GlobalKey` на `MaterialApp`:
+**Из `onNotificationTap` (передайте ту же логику в `openChat`):**
 
 ```dart
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -60,8 +46,11 @@ void openChat() {
   );
 }
 
+// в MaterialApp:
 MaterialApp(navigatorKey: navigatorKey, home: /* ... */);
 ```
+
+Один и тот же `openChat` можно повесить и на кнопку «Чат», если удобнее — тогда достаточно `navigatorKey`.
 
 ---
 
@@ -73,21 +62,18 @@ MaterialApp(navigatorKey: navigatorKey, home: /* ... */);
 ### Android
 
 
-| Что                         | Откуда                                                                | Куда                                                                                                         |
-| --------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `google-services.json`      | Firebase Console → приложение Android                                 | `android/app/google-services.json`                                                                           |
-| FCM service-account `.json` | Firebase Console → Project settings → Service accounts → Generate key | **[support@livetex.ru](mailto:support@livetex.ru)** (вариант B; указать ключ разработчика / аккаунт LiveTex) |
+| Что                         | Откуда                                                                | Куда                                                                                              |
+| --------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `google-services.json`      | Firebase Console → приложение Android                                 | `android/app/google-services.json`                                                                |
+| FCM service-account `.json` | Firebase Console → Project settings → Service accounts → Generate key | **[support@livetex.ru](mailto:support@livetex.ru)** (указать ключ разработчика / аккаунт LiveTex) |
 
 
 ### iOS
 
 
-| Что                        | Откуда                                                                 | Куда                                                            |
-| -------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `GoogleService-Info.plist` | Firebase Console → приложение iOS                                      | `ios/Runner/` (через Xcode)                                     |
-| APNS `.p12` + пароль       | Apple Developer → APNS cert (подробнее — KB LiveTex, «SDK iOS → Push») | **[support@livetex.ru](mailto:support@livetex.ru)** (вариант B) |
-| Capabilities               | Xcode → Runner                                                         | Push Notifications, Background Modes → Remote notifications     |
-
-
----
+| Что                        | Откуда                                                                 | Куда                                                        |
+| -------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `GoogleService-Info.plist` | Firebase Console → приложение iOS                                      | `ios/Runner/` (через Xcode)                                 |
+| APNS `.p12` + пароль       | Apple Developer → APNS cert (подробнее — KB LiveTex, «SDK iOS → Push») | **[support@livetex.ru](mailto:support@livetex.ru)**         |
+| Capabilities               | Xcode → Runner                                                         | Push Notifications, Background Modes → Remote notifications |
 
