@@ -2,7 +2,9 @@
 
 Dart `>=3.6`. Flutter `>=3.27`.
 
-[Настройка push](PUSH_INTEGRATION.md) — Firebase, APNS, навигация по тапу на уведомление.
+## Документация
+
+- [PUSH_INTEGRATION.md](PUSH_INTEGRATION.md) — нативная настройка Firebase/APNS, навигация по push, доставка у LiveTex.
 
 ```yaml
 dependencies:
@@ -64,6 +66,7 @@ LivetexChatScreen(
 
 await push.dispose();
 chat.dispose();
-
 ```
+
+Подробнее про push: [PUSH_INTEGRATION.md](PUSH_INTEGRATION.md).
 
