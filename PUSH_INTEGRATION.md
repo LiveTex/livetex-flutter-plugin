@@ -1,173 +1,79 @@
-# LiveTex Flutter SDK — настройка push-уведомлений
-
-Документ для интегратора, встраивающего LiveTex Flutter SDK в своё приложение.
-Описывает, как подключить push-уведомления, чтобы пользователь получал ответ
-оператора, когда приложение свёрнуто.
+# Push — дополнение к [README.md](README.md)
 
 ---
 
-## 1. Как это работает
+## Поведение LiveTex
 
-Пока приложение открыто, чат работает через WebSocket — сообщения приходят
-мгновенно, push не нужен. Когда пользователь **сворачивает приложение**,
-`LivetexChatPush` разрывает WebSocket. Сервер LiveTex отправляет push-уведомление
-при новом сообщении от оператора **только если у визитёра нет активного
-WebSocket-соединения**.
+- Пока приложение на экране и сокет жив — сообщения по WebSocket, push не используется.
+- `LivetexChatPush` при сворачивании вызывает `chat.disconnect()` → LiveTex шлёт push, только если у визитёра **нет активного WebSocket**.
+- Экран чата закрыт, приложение на переднем плане — **не push**; слушайте `chat.messages`, свой in-app индикатор.
 
-Каждое сообщение оператора, отправленное пока приложение свёрнуто, формирует
-своё push-уведомление. При возврате на экран чата всё равно стоит подгрузить
-историю — доставка push (FCM/APNS) не даёт 100% гарантии, отдельные
-уведомления могут не дойти.
-
-> **Оповещение, когда экран чата закрыт, но приложение открыто** — это НЕ задача
-> push. Сокет на переднем плане жив; подпишитесь на `chat.messages` и покажите
-> свой in-app индикатор.
-
-Доставка push возможна двумя способами (на стороне LiveTex):
-
-| Способ | Кто шлёт push | Что передать в LiveTex |
-|---|---|---|
-| **A. Свой сервер** (рекомендует LiveTex) | Ваш бэкенд по вебхуку от LiveTex | URL вашего сервера |
-| **B. LiveTex напрямую** | Серверы LiveTex (FCM / APNS) | FCM service-account ключ и/или APNS-сертификат |
-
-В обоих случаях **код в приложении одинаковый** (раздел 2) — приложение всегда
-получает device-token и передаёт его в LiveTex. Различается только настройка
-доставки (раздел 3).
+Push на устройство доставляет **LiveTex** (FCM / APNS). Ключи передаёте на **[support@livetex.ru](mailto:support@livetex.ru)** — см. таблицы ниже.
 
 ---
 
-## 2. Код приложения (одинаково для обоих способов)
+## Как открыть экран чата
 
-### 2.1. Зависимости
+В README у `LivetexChatPush` указано `onNotificationTap: openChat`. Эта функция должна показать `LivetexChatScreen` — **тот же экран**, что и при обычном входе в чат из вашего UI.
 
-В `pubspec.yaml` приложения:
+Два входа — два способа навигации:
 
-```yaml
-dependencies:
-  livetex_chat:
-    git: { url: https://github.com/LiveTex/livetex-flutter-plugin.git, path: packages/livetex_chat }
-  livetex_chat_ui:
-    git: { url: https://github.com/LiveTex/livetex-flutter-plugin.git, path: packages/livetex_chat_ui }
-  livetex_chat_push:
-    git: { url: https://github.com/LiveTex/livetex-flutter-plugin.git, path: packages/livetex_chat_push }
-  firebase_core: ^4.9.0
-  firebase_messaging: ^16.2.2
-```
+| Откуда | Почему |
+| --- | --- |
+| Кнопка / пункт меню в приложении | Есть `context` виджета → обычный `Navigator` |
+| Тап по push-уведомлению | `context` часто нет (фон, cold start) → `GlobalKey<NavigatorState>` на `MaterialApp` |
 
-### 2.2. Инициализация в `main()`
-
-Фоновый обработчик push **обязан** регистрироваться до `runApp`:
+**Из UI приложения:**
 
 ```dart
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:livetex_chat_push/livetex_chat_push.dart';
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(livetexFirebaseBackgroundHandler);
-  runApp(const MyApp());
-}
-```
-
-### 2.3. Создание `LivetexChatPush`
-
-`LivetexChat` держите на уровне приложения (он должен переживать открытие/закрытие
-экрана чата). Рядом создайте `LivetexChatPush`:
-
-```dart
-final chat = LivetexChat(LivetexChatConfig(touchPoint: '<ваш ключ>'));
-
-final push = LivetexChatPush(
-  chat: chat,
-  onNotificationTap: () {
-    // Открыть экран чата. Используйте GlobalKey<NavigatorState>,
-    // т.к. тап может прийти когда виджет-дерево ещё не построено.
-  },
+Navigator.of(context).push(
+  MaterialPageRoute(
+    builder: (_) => LivetexChatScreen(config: chat.config, chat: chat, title: "Чат"),
+  ),
 );
-await push.initialize();
 ```
 
-`initialize()` сам: запросит разрешение на уведомления (системный диалог),
-получит device-token и передаст его в LiveTex, подпишется на входящие push и
-на жизненный цикл приложения (разрыв сокета при сворачивании).
+**Из `onNotificationTap` (передайте ту же логику в `openChat`):**
 
-При завершении — `await push.dispose()`.
+```dart
+final navigatorKey = GlobalKey<NavigatorState>();
 
----
+void openChat() {
+  navigatorKey.currentState?.push(
+    MaterialPageRoute(
+      builder: (_) => LivetexChatScreen(config: chat.config, chat: chat, title: "Чат"),
+    ),
+  );
+}
 
-## 3. Настройка доставки push
+// в MaterialApp:
+MaterialApp(navigatorKey: navigatorKey, home: /* ... */);
+```
 
-### Вариант A — свой сервер (рекомендуется LiveTex)
-
-Вы присылаете в LiveTex URL вашего сервера. LiveTex шлёт на него вебхук с JSON
-при новом сообщении оператора, когда соединение с приложением прервано:
-
-| Поле | Тип | Обяз. | Описание |
-|---|---|---|---|
-| `version` | string | + | Версия протокола (сейчас `1`) |
-| `platform` | string | + | `ios` или `android` |
-| `to` | string | + | device-token устройства (FCM-токен / APNS-токен) |
-| `text` | string | − | Текст сообщения |
-| `url` | string | − | Ссылка на файл |
-
-Ваш сервер на основе этих данных сам отправляет push в FCM/APNS.
-
-**Плюс:** вы не передаёте третьей стороне ключи; полный контроль над содержимым.
-
-### Вариант B — LiveTex шлёт push напрямую
-
-#### Android (FCM)
-
-1. Создайте проект в [Firebase Console](https://console.firebase.google.com/)
-   (или используйте существующий).
-2. Добавьте Android-приложение с вашим `applicationId`, скачайте
-   `google-services.json` → положите в `android/app/google-services.json`.
-3. В `android/settings.gradle(.kts)` в блок `plugins`:
-   `id "com.google.gms.google-services" version "4.4.2" apply false`
-4. В `android/app/build.gradle(.kts)` в блок `plugins`:
-   `id "com.google.gms.google-services"`
-5. В Firebase Console → Настройки проекта → **Сервисные аккаунты** → создайте
-   закрытый ключ (скачается `.json`). Отправьте этот `.json` на
-   **support@livetex.ru**, указав ваш ключ разработчика / идентификатор аккаунта
-   LiveTex.
-
-#### iOS (APNS)
-
-LiveTex отправляет push на iOS через APNS напрямую. При этом Flutter-SDK
-использует `firebase_messaging` для получения APNS-токена устройства, поэтому
-iOS-приложению нужен и Firebase, и APNS-сертификат у LiveTex:
-
-1. В Firebase Console добавьте iOS-приложение, скачайте `GoogleService-Info.plist`
-   → добавьте в `ios/Runner/` через Xcode.
-2. В Xcode для таргета Runner включите capability **Push Notifications** и
-   **Background Modes → Remote notifications**.
-3. Создайте APNS-сертификат (CSR в Keychain Access → App ID с capability
-   Push Notifications в Apple Developer → APNS SSL Certificate → экспорт `.p12`
-   с паролем). Подробная пошаговая инструкция — в KB LiveTex, раздел
-   «SDK для iOS → Push нотификации».
-4. Отправьте `.p12` + пароль на **support@livetex.ru**, указав ваш ключ
-   разработчика / идентификатор аккаунта и профиль (development/Sandbox или
-   production).
-
-> Передача FCM-ключа / APNS-сертификата в LiveTex — это шаг настройки на стороне
-> LiveTex; полные инструкции и скриншоты — в базе знаний LiveTex (разделы
-> «SDK для Android» и «SDK для iOS», подраздел «Push нотификации»).
+Один и тот же `openChat` можно повесить и на кнопку «Чат», если удобнее — тогда достаточно `navigatorKey`.
 
 ---
 
-## 4. Проверка
+## Нативная настройка — куда что класть
 
-1. Соберите приложение на физическом устройстве (push не работает на эмуляторе
-   без Google Play / на iOS-симуляторе).
-2. Откройте экран чата — в трейсе (`LivetexChatConfig.trace`) убедитесь, что в
-   auth уходит `deviceToken=…`.
-3. Сверните приложение — в трейсе появится `ws_done` (сокет разорван).
-4. Пусть оператор ответит из консоли LiveTex.
-5. На устройстве появится push с текстом ответа; тап по нему открывает чат.
+Нужен Firebase в проекте приложения (`flutterfire configure` или вручную).  
+`firebase_core` / `firebase_messaging` подтягиваются из `livetex_chat_push`; если в app уже свой Firebase — выровняйте версии в `pubspec`.
 
-> На iOS APNS-токен обычно не готов в момент старта приложения — первый `auth`
-> может уйти без `deviceToken`, а когда токен появится, SDK сделает повторный
-> `auth` уже с `deviceToken=…`. Два запроса `auth` подряд в трейсе — это
-> нормально.
+### Android
+
+
+| Что                         | Откуда                                                                | Куда                                                                                              |
+| --------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `google-services.json`      | Firebase Console → приложение Android                                 | `android/app/google-services.json`                                                                |
+| FCM service-account `.json` | Firebase Console → Project settings → Service accounts → Generate key | **[support@livetex.ru](mailto:support@livetex.ru)** (указать ключ разработчика / аккаунт LiveTex) |
+
+
+### iOS
+
+
+| Что                        | Откуда                                                                 | Куда                                                        |
+| -------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `GoogleService-Info.plist` | Firebase Console → приложение iOS                                      | `ios/Runner/` (через Xcode)                                 |
+| APNS `.p12` + пароль       | Apple Developer → APNS cert (подробнее — KB LiveTex, «SDK iOS → Push») | **[support@livetex.ru](mailto:support@livetex.ru)**         |
+| Capabilities               | Xcode → Runner                                                         | Push Notifications, Background Modes → Remote notifications |
+
