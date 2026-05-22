@@ -1,3 +1,5 @@
+import "dart:async";
+
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 
@@ -52,6 +54,7 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
   /// -1 = no pick (Initial); 1..5 (fivePoint) / 0|1 (doublePoint) otherwise.
   int _picked = -1;
   bool _submitting = false;
+  Timer? _confirmBackstop;
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
   bool get _isDoublePoint => widget.rate.enabledType == "doublePoint";
@@ -64,6 +67,7 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     final wasSet = oldWidget.rate.isSet?.value;
     final nowSet = widget.rate.isSet?.value;
     if (wasSet != nowSet && nowSet != null && _submitting) {
+      _confirmBackstop?.cancel();
       _submitting = false;
       _picked = -1;
       // Defer the parent setState — calling onExpandedChanged synchronously
@@ -89,6 +93,7 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
 
   @override
   void dispose() {
+    _confirmBackstop?.cancel();
     super.dispose();
   }
 
@@ -107,7 +112,17 @@ class _TopRatingPanelState extends State<TopRatingPanel> {
     if (!mounted || !_submitting) return;
     // SendSuccess: server accepted; the rate.isSet dialogState update will
     // collapse the panel via didUpdateWidget — keep the submitting lock.
-    if (result is SendSuccess) return;
+    if (result is SendSuccess) {
+      // Server accepted the rating. Normally `didUpdateWidget` collapses the
+      // panel on the `rate.isSet` transition. Backstop: if that state frame
+      // never arrives, unblock anyway after a grace period — no error, the
+      // submission DID succeed.
+      _confirmBackstop?.cancel();
+      _confirmBackstop = Timer(const Duration(seconds: 8), () {
+        if (mounted && _submitting) setState(() => _submitting = false);
+      });
+      return;
+    }
     setState(() => _submitting = false);
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(_ratingErrorText(result))),
@@ -227,6 +242,7 @@ class BottomRatingForm extends StatefulWidget {
 class _BottomRatingFormState extends State<BottomRatingForm> {
   int _picked = -1;
   bool _submitting = false;
+  Timer? _confirmBackstop;
   final TextEditingController _comment = TextEditingController();
 
   bool get _isFivePoint => widget.rate.enabledType == "fivePoint";
@@ -250,12 +266,14 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     final wasSet = oldWidget.rate.isSet?.value;
     final nowSet = widget.rate.isSet?.value;
     if (wasSet != nowSet && nowSet != null && _submitting) {
+      _confirmBackstop?.cancel();
       _submitting = false;
     }
   }
 
   @override
   void dispose() {
+    _confirmBackstop?.cancel();
     _comment.dispose();
     super.dispose();
   }
@@ -266,7 +284,17 @@ class _BottomRatingFormState extends State<BottomRatingForm> {
     setState(() => _submitting = true);
     final result = await widget.onSubmit(_picked.toString(), c.isEmpty ? null : c);
     if (!mounted || !_submitting) return;
-    if (result is SendSuccess) return;
+    if (result is SendSuccess) {
+      // Server accepted the rating. Normally `didUpdateWidget` collapses the
+      // panel on the `rate.isSet` transition. Backstop: if that state frame
+      // never arrives, unblock anyway after a grace period — no error, the
+      // submission DID succeed.
+      _confirmBackstop?.cancel();
+      _confirmBackstop = Timer(const Duration(seconds: 8), () {
+        if (mounted && _submitting) setState(() => _submitting = false);
+      });
+      return;
+    }
     setState(() => _submitting = false);
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(_ratingErrorText(result))),
