@@ -2,6 +2,10 @@
 
 Dart `>=3.6`. Flutter `>=3.27` для UI и push (стек Firebase Messaging 16.x).
 
+## Документация
+
+- [Настройка push-уведомлений](PUSH_INTEGRATION.md)
+
 ```yaml
 dependencies:
   livetex_chat:
@@ -16,75 +20,71 @@ dependencies:
     git:
       url: https://github.com/LiveTex/livetex-flutter-plugin.git
       path: packages/livetex_chat_push
+  firebase_core: ^4.9.0
+  firebase_messaging: ^16.2.2
 ```
 
 ```dart
 import "package:firebase_core/firebase_core.dart";
-import "package:flutter/foundation.dart";
+import "package:firebase_messaging/firebase_messaging.dart";
 import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 import "package:livetex_chat_push/livetex_chat_push.dart";
 import "package:livetex_chat_ui/livetex_chat_ui.dart";
 
+// Нужен, чтобы открыть экран чата по тапу на push, когда дерево
+// виджетов ещё/уже не построено.
+final navigatorKey = GlobalKey<NavigatorState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Инициализация Firebase до runApp: требуется для FCM и LivetexPushBootstrap.
-  // Настройка проекта: документация FlutterFire, команда `flutterfire configure`.
-  try {
-    if (Firebase.apps.isEmpty) {
-      await Firebase.initializeApp();
-    }
-  } catch (e) {
-    // Если Firebase ещё не настроен, приложение может работать без пушей.
-    if (kDebugMode) {
-      debugPrint("Firebase.initializeApp: $e");
-    }
-  }
+  // Firebase должен быть настроен в проекте — см. PUSH_INTEGRATION.md.
+  await Firebase.initializeApp();
+  // Фоновый обработчик push регистрируется ДО runApp.
+  FirebaseMessaging.onBackgroundMessage(livetexFirebaseBackgroundHandler);
   runApp(const ExampleApp());
 }
 
-class ExampleApp extends StatelessWidget {
+class ExampleApp extends StatefulWidget {
   const ExampleApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(home: ExampleHome());
-  }
+  State<ExampleApp> createState() => _ExampleAppState();
 }
 
-class ExampleHome extends StatelessWidget {
-  const ExampleHome({super.key});
+class _ExampleAppState extends State<ExampleApp> {
+  // LivetexChat и LivetexChatPush живут на уровне приложения — они должны
+  // переживать открытие/закрытие экрана чата (этого требует push).
+  late final LivetexChat _chat;
+  late final LivetexChatPush _push;
 
-  void _openChat(BuildContext context) {
-    // Для обращения в поддержку приложите этот журнал и текст chat.collectSupportReport().
-    final traceLines = <String>[];
+  // Журнал для отладки: при обращении в поддержку приложите его содержимое.
+  final _trace = <String>[];
 
-    final cfg = LivetexChatConfig(
-      touchPoint: "<touchPoint>",
-      authEndpoint: Uri.parse("https://visitor-api.livetex.ru/v1/auth"),
-      visitorToken: null, // опционально: сохранённый токен — тот же посетитель/диалог
-      trace: traceLines.add, // Опционально: Дебаг журнал
+  @override
+  void initState() {
+    super.initState();
+    _chat = LivetexChat(
+      LivetexChatConfig(touchPoint: "<touchPoint>", trace: _trace.add),
     );
+    _push = LivetexChatPush(chat: _chat, onNotificationTap: _openChat);
+    _push.initialize();
+  }
 
-    Navigator.of(context).push<void>(
+  @override
+  void dispose() {
+    _push.dispose();
+    _chat.dispose();
+    super.dispose();
+  }
+
+  void _openChat() {
+    navigatorKey.currentState?.push<void>(
       MaterialPageRoute<void>(
         builder: (_) => LivetexChatScreen(
-          config: cfg,
+          config: _chat.config,
+          chat: _chat,
           title: "Чат",
-          afterConnected: (LivetexChat chat) async {
-            if (kIsWeb) {
-              // На веб-платформе в этом примере push не инициализируем.
-              return;
-            }
-            try {
-              // Подключение push: получение FCM-токена, привязка к сессии, локальные уведомления.
-              await LivetexPushBootstrap.init(chat: chat);
-            } catch (e) {
-              if (kDebugMode) {
-                debugPrint("LivetexPushBootstrap.init: $e");
-              }
-            }
-          },
         ),
       ),
     );
@@ -92,11 +92,14 @@ class ExampleHome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: FilledButton(
-          onPressed: () => _openChat(context),
-          child: const Text("Открыть чат"),
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      home: Scaffold(
+        body: Center(
+          child: FilledButton(
+            onPressed: _openChat,
+            child: const Text("Открыть чат"),
+          ),
         ),
       ),
     );
