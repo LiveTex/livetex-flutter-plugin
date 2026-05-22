@@ -144,7 +144,17 @@ class _AttrField extends StatelessWidget {
           horizontal: 24,
           vertical: 24,
         ),
+        // Self-contained decoration — unset fields would otherwise inherit
+        // the host app's ThemeData.inputDecorationTheme and bleed a second
+        // border / fill into the field. The card outline + dividers around
+        // these fields are drawn by the parent; each field stays borderless.
         border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        disabledBorder: InputBorder.none,
+        errorBorder: InputBorder.none,
+        focusedErrorBorder: InputBorder.none,
+        filled: false,
       ),
     );
   }

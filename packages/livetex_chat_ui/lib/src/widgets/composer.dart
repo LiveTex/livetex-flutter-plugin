@@ -154,7 +154,21 @@ class _ComposerState extends State<Composer> with WidgetsBindingObserver {
                     decoration: InputDecoration(
                       hintText: "Введите сообщение",
                       hintStyle: TextStyle(color: theme.composerHint),
+                      // Fully self-contained decoration. Unset InputDecoration
+                      // fields inherit from the HOST app's
+                      // ThemeData.inputDecorationTheme — a host app with its
+                      // own input styling would otherwise bleed a second
+                      // border / fill into this field ("box-in-a-box"). The
+                      // visible field background + border come from the
+                      // wrapping Container; the TextField stays borderless and
+                      // unfilled regardless of the embedding app's theme.
                       border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      errorBorder: InputBorder.none,
+                      focusedErrorBorder: InputBorder.none,
+                      filled: false,
                       counterText: "",
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16,
