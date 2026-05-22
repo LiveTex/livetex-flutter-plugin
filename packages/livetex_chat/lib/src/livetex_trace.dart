@@ -13,6 +13,10 @@ void livetexTraceMaybeEmit(
   sink(livetexTraceFormatLine(body));
 }
 
+/// Redacts secrets from a trace line. NOTE: matches only known `key=value` /
+/// `Bearer …` / `wss://…/v1/ws/<token>` forms. A bare token value with no
+/// surrounding key is NOT redacted — never pass a raw visitorToken /
+/// deviceToken into a trace string outside those forms.
 String livetexTraceRedact(String input, {required bool redact}) {
   if (!redact) return input;
   var s = input;

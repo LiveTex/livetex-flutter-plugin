@@ -20,6 +20,10 @@ final class LivetexChat {
   final LivetexChatConfig config;
   final http.Client? _http;
   String? _deviceTokenOverride;
+  /// Серверный visitorToken последнего успешного auth. Переиспользуется на
+  /// реконнектах — без этого sticky-routing рвётся и бот теряет контекст.
+  String? _lastVisitorToken;
+  bool _visitorTokenLoaded = false;
   LivetexVisitorSession? _session;
   StreamSubscription<VisitorServerMessage>? _msgSub;
   int _corrSeq = 0;
@@ -27,6 +31,7 @@ final class LivetexChat {
   Timer? _reconnectTimer;
   int _backoffSec = 3;
   static const int _backoffMax = 30;
+  bool _opening = false;
 
   final _connection = StreamController<LivetexConnectionState>.broadcast();
   final _dialog = StreamController<VisitorDialogState?>.broadcast();
@@ -102,59 +107,98 @@ final class LivetexChat {
 
   Future<void> connect() async {
     _disconnectRequested = false;
+    // Идемпотентность: если уже подключены или подключение идёт — не
+    // открываем новую сессию. Без проверки `connected` каждый resumed-эвент
+    // жизненного цикла дёргал бы полный реконнект (и бэкенд не успевал бы
+    // увидеть «нет сокета» для отправки push).
+    if (isConnected ||
+        _connNow == LivetexConnectionState.connecting ||
+        _connNow == LivetexConnectionState.reconnecting) {
+      _emitTrace("connect() noop (conn=$_connNow)");
+      return;
+    }
+    _emitTrace("connect() requested (conn=$_connNow)");
+    if (!_visitorTokenLoaded) {
+      _visitorTokenLoaded = true;
+      _lastVisitorToken ??= await config.loadVisitorToken?.call();
+    }
     await _openSession();
   }
 
   Future<void> _openSession() async {
     if (_disconnectRequested) return;
-    await _msgSub?.cancel();
-    _msgSub = null;
+    // Re-entrancy guard: lifecycle (push) + reconnect timer + updateDeviceToken
+    // can each call _openSession concurrently — without this we get two live
+    // sessions (CORE_TODOS 2.6).
+    if (_opening) return;
+    _opening = true;
+    // Отменяем запланированный backoff-реконнект: иначе таймер выстрелит
+    // второй _openSession и появятся две живые сессии.
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     try {
-      await _session?.close();
-    } catch (_) {}
-    _session = null;
-    _setConn(
-      _session == null
-          ? LivetexConnectionState.connecting
-          : LivetexConnectionState.reconnecting,
-    );
-    _emitTrace("connect");
-    try {
-      _session = await LivetexVisitorSession.connect(
-        authEndpoint: config.resolveAuthEndpoint(),
-        touchPoint: config.touchPoint,
-        httpClient: _http,
-        visitorToken: config.visitorToken,
-        customVisitorToken: config.customVisitorToken,
-        deviceToken: _deviceTokenOverride ?? config.deviceToken,
-        deviceType: resolveLivetexVisitorDeviceType(config.deviceType),
-        headers: config.headers,
-        trace: config.trace,
-        traceRedactTokens: config.traceRedactTokens,
-        onInboundText: config.trace != null ? _traceInboundFrame : null,
+      await _msgSub?.cancel();
+      _msgSub = null;
+      try {
+        await _session?.close();
+      } catch (_) {}
+      _session = null;
+      _setConn(
+        _session == null
+            ? LivetexConnectionState.connecting
+            : LivetexConnectionState.reconnecting,
       );
-      _session!.onDisconnected = _onSocketDone;
-      _msgSub = _session!.messages.listen(
-        _onServerMessage,
-        onError: (Object e, StackTrace st) {
-          _registerError(LivetexChatError(message: "$e", cause: e));
-        },
-      );
-      _backoffSec = 3;
-      _setConn(LivetexConnectionState.connected);
-      _emitTrace("connected");
-    } on LivetexVisitorAuthException catch (e) {
-      _setConn(LivetexConnectionState.disconnected);
-      _registerError(
-        LivetexChatError(
-          message: e.body,
-          code: "auth_http_${e.statusCode}",
-          cause: e,
-        ),
-      );
-    } catch (e) {
-      _setConn(LivetexConnectionState.disconnected);
-      _registerError(LivetexChatError(message: "$e", cause: e));
+      _emitTrace("connect");
+      try {
+        _session = await LivetexVisitorSession.connect(
+          authEndpoint: config.resolveAuthEndpoint(),
+          touchPoint: config.touchPoint,
+          httpClient: _http,
+          visitorToken: _lastVisitorToken ?? config.visitorToken,
+          customVisitorToken: config.customVisitorToken,
+          deviceToken: _deviceTokenOverride ?? config.deviceToken,
+          deviceType: resolveLivetexVisitorDeviceType(config.deviceType),
+          headers: config.headers,
+          trace: config.trace,
+          traceRedactTokens: config.traceRedactTokens,
+          onInboundText: config.trace != null ? _traceInboundFrame : null,
+        );
+        _session!.onDisconnected = _onSocketDone;
+        _msgSub = _session!.messages.listen(
+          _onServerMessage,
+          onError: (Object e, StackTrace st) {
+            _registerError(LivetexChatError(message: "$e", cause: e));
+          },
+        );
+        _backoffSec = 3;
+        _setConn(LivetexConnectionState.connected);
+        _lastVisitorToken = _session!.auth.visitorToken;
+        final saveCb = config.saveVisitorToken;
+        if (saveCb != null) {
+          try {
+            await saveCb(_lastVisitorToken!);
+          } catch (e) {
+            // Сбой хранилища хоста не должен ронять соединение.
+            _emitTrace("saveVisitorToken failed: $e");
+          }
+        }
+        _emitTrace("connected");
+      } on LivetexVisitorAuthException catch (e) {
+        _lastVisitorToken = null;
+        _setConn(LivetexConnectionState.disconnected);
+        _registerError(
+          LivetexChatError(
+            message: e.body,
+            code: "auth_http_${e.statusCode}",
+            cause: e,
+          ),
+        );
+      } catch (e) {
+        _setConn(LivetexConnectionState.disconnected);
+        _registerError(LivetexChatError(message: "$e", cause: e));
+      }
+    } finally {
+      _opening = false;
     }
   }
 
@@ -172,17 +216,12 @@ final class LivetexChat {
     _reconnectTimer = Timer(Duration(seconds: wait), () async {
       if (_disconnectRequested) return;
       _backoffSec = min(_backoffSec * 2, _backoffMax);
-      await _msgSub?.cancel();
-      _msgSub = null;
-      try {
-        await _session?.close();
-      } catch (_) {}
-      _session = null;
       await _openSession();
     });
   }
 
   Future<void> disconnect() async {
+    _emitTrace("disconnect() requested");
     _disconnectRequested = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
@@ -195,9 +234,16 @@ final class LivetexChat {
     _setConn(LivetexConnectionState.disconnected);
   }
 
-  /// Updates push token for the next auth / reconnect cycle.
+  /// Обновляет push-токен. Если сокет уже подключён и токен изменился —
+  /// переавторизуется (реконнект) с новым `deviceToken`, иначе токен
+  /// подхватит ближайший `connect()`.
   void updateDeviceToken(String? token) {
+    if (token == _deviceTokenOverride) return;
     _deviceTokenOverride = token;
+    if (isConnected) {
+      _emitTrace("updateDeviceToken changed → reauth");
+      unawaited(_openSession());
+    }
   }
 
   void _onServerMessage(VisitorServerMessage m) {
