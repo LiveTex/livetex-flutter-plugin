@@ -409,10 +409,29 @@ final class LivetexChat {
 
   void _upsert(ChatMessage row) {
     final existed = _byId[row.id];
-    _byId[row.id] = row;
-    if (existed == null && !_order.contains(row.id)) {
-      _insertSortedId(row.id);
+    if (existed == null) {
+      _byId[row.id] = row;
+      if (!_order.contains(row.id)) _insertSortedId(row.id);
+      return;
     }
+    // Same id already present. The Visitor API delivers a "file with
+    // caption" as two update pieces — a `file` row and a `text` row — under
+    // one shared id; a blind `_byId[id] = row` drops whichever piece arrived
+    // first. Merge field-wise instead: the incoming piece wins where it
+    // carries a value, the stored value is kept otherwise. `sendState` is
+    // deliberately left to the stored row — a history re-broadcast of a
+    // visitor message must not reset its `sent`/`failed` marker to `none`.
+    _byId[row.id] = existed.copyWith(
+      createdAt: row.createdAt,
+      isVisitor: row.isVisitor,
+      text: row.text,
+      fileName: row.fileName,
+      fileUrl: row.fileUrl,
+      creatorLabel: row.creatorLabel,
+      creatorType: row.creatorType,
+      avatarUrl: row.avatarUrl,
+      keyboard: row.keyboard,
+    );
   }
 
   List<ChatMessage> _snapshotMessages() {
@@ -473,9 +492,26 @@ final class LivetexChat {
   }
 
   Future<void> sendFile(File file, {String? logicalName}) async {
-    final s = _session;
+    // Picking a file launches a separate activity (Android) / controller
+    // (iOS): that backgrounds the app, and the lifecycle observer closes the
+    // socket. So the picked file almost always lands here with no session and
+    // a reconnect already in flight — wait for it instead of dropping the
+    // file. The optimistic `pending:` message is created further down, only
+    // once the session is back, which also keeps it clear of
+    // `_markPendingAsFailed` (run inside that reconnect's `_openSession`).
+    var s = _session;
     if (s == null) {
-      _emitTrace("sendFile SKIPPED (no session) name=$logicalName");
+      _emitTrace("sendFile waiting for session name=$logicalName");
+      s = await _waitForSession(const Duration(seconds: 20));
+    }
+    if (s == null) {
+      _emitTrace("sendFile FAILED name=$logicalName (no session after wait)");
+      _registerError(
+        const LivetexChatError(
+          message: "Не удалось отправить файл: нет соединения",
+          code: "file_no_session",
+        ),
+      );
       return;
     }
     _emitTrace(
@@ -534,6 +570,19 @@ final class LivetexChat {
         ),
       );
     }
+  }
+
+  /// Polls for a live session up to [timeout], nudging a reconnect once.
+  /// Used by [sendFile]: the OS file picker backgrounds the app mid-flow, so
+  /// the picked file commonly arrives during the post-resume reconnect gap.
+  Future<LivetexVisitorSession?> _waitForSession(Duration timeout) async {
+    if (_session != null) return _session;
+    unawaited(connect());
+    final deadline = DateTime.now().add(timeout);
+    while (_session == null && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+    return _session;
   }
 
   Future<SendResult> sendRating({
