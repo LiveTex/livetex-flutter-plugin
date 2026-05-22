@@ -386,6 +386,11 @@ class _MessageBubble extends StatelessWidget {
     final imageUrl = isImage
         ? (fileUrl ?? (_isImageUrl(text) ? text : null))
         : null;
+    // A genuine caption: message text that is NOT itself the bare image URL
+    // already rendered as `imageUrl`. Non-null for an operator "file with
+    // caption" message (file + text merged under one id by LivetexChat).
+    final caption =
+        (text != null && text!.isNotEmpty && text != imageUrl) ? text : null;
     // Adaptive radius: a flat `borderRadius` of 30 turns short 2-line
     // bubbles into balls when content width ≈ height ≈ 2*radius. Clamp to
     // half of the smaller side so the rounding caps out at "stadium /
@@ -462,13 +467,20 @@ class _MessageBubble extends StatelessWidget {
                     ],
                   ),
                 ),
-              )
-            else if (text != null && text!.isNotEmpty)
+              ),
+            // Caption text under a file/image. The Visitor API delivers an
+            // operator "file with caption" as a file piece + a text piece
+            // sharing one id (merged in LivetexChat._upsert); render the
+            // caption below the attachment instead of dropping it.
+            if (caption != null) ...[
+              if (imageUrl != null || (isFile && fileName != null))
+                const SizedBox(height: 6),
               _TextWithOptionalQuote(
-                text: text!,
+                text: caption,
                 fg: fg,
                 onTap: onShowActions,
               ),
+            ],
           ],
         ),
         ),

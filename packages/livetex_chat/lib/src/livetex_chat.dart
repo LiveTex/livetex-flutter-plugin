@@ -409,10 +409,29 @@ final class LivetexChat {
 
   void _upsert(ChatMessage row) {
     final existed = _byId[row.id];
-    _byId[row.id] = row;
-    if (existed == null && !_order.contains(row.id)) {
-      _insertSortedId(row.id);
+    if (existed == null) {
+      _byId[row.id] = row;
+      if (!_order.contains(row.id)) _insertSortedId(row.id);
+      return;
     }
+    // Same id already present. The Visitor API delivers a "file with
+    // caption" as two update pieces — a `file` row and a `text` row — under
+    // one shared id; a blind `_byId[id] = row` drops whichever piece arrived
+    // first. Merge field-wise instead: the incoming piece wins where it
+    // carries a value, the stored value is kept otherwise. `sendState` is
+    // deliberately left to the stored row — a history re-broadcast of a
+    // visitor message must not reset its `sent`/`failed` marker to `none`.
+    _byId[row.id] = existed.copyWith(
+      createdAt: row.createdAt,
+      isVisitor: row.isVisitor,
+      text: row.text,
+      fileName: row.fileName,
+      fileUrl: row.fileUrl,
+      creatorLabel: row.creatorLabel,
+      creatorType: row.creatorType,
+      avatarUrl: row.avatarUrl,
+      keyboard: row.keyboard,
+    );
   }
 
   List<ChatMessage> _snapshotMessages() {
