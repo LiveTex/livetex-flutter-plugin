@@ -46,6 +46,7 @@ final class LivetexChat {
   final Map<String, ChatMessage> _byId = {};
   final List<String> _order = [];
   final Map<String, Completer<SendResult>> _pendingSends = {};
+  final Map<String, Completer<int>> _pendingHistory = {};
   VisitorDialogState? _lastDialog;
   DateTime? _lastTypingEmit;
   Stream<LivetexConnectionState> get connectionState => _connection.stream;
@@ -257,11 +258,15 @@ final class LivetexChat {
         _lastDialog = m;
         if (!_dialog.isClosed) _dialog.add(m);
         _emitMessages();
-      case VisitorUpdate(:final messages):
+      case VisitorUpdate(:final messages, :final correlationId):
         for (final piece in messages) {
           _ingestUpdatePiece(piece);
         }
         _emitMessages();
+        if (correlationId != null) {
+          final c = _pendingHistory.remove(correlationId);
+          if (c != null && !c.isCompleted) c.complete(messages.length);
+        }
       case final VisitorResult r:
         _applyResult(r.correlationId, r.sentMessage, r.errors);
         _resolveSend(
@@ -594,14 +599,27 @@ final class LivetexChat {
     return _awaitSendResult(correlationId);
   }
 
-  void loadHistory({required String messageId, int offset = 0}) {
+  /// Запрашивает историю до [messageId]. Возвращает число сообщений в ответе
+  /// сервера: 0 — более старых сообщений нет (история исчерпана).
+  Future<int> loadHistory({required String messageId, int offset = 0}) {
+    final s = _session;
+    if (s == null) return Future.value(0);
     final corr = _nextCorrelation("hist");
-    _session?.sendRawJson(
+    final completer = Completer<int>();
+    _pendingHistory[corr] = completer;
+    s.sendRawJson(
       VisitorOutgoing.getHistory(
         correlationId: corr,
         messageId: messageId,
         offset: offset,
       ),
+    );
+    return completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        _pendingHistory.remove(corr);
+        return 0;
+      },
     );
   }
 
@@ -618,6 +636,10 @@ final class LivetexChat {
       if (!c.isCompleted) c.complete(const SendTimeout());
     }
     _pendingSends.clear();
+    for (final c in _pendingHistory.values) {
+      if (!c.isCompleted) c.complete(0);
+    }
+    _pendingHistory.clear();
     await _connection.close();
     await _dialog.close();
     await _messagesCtrl.close();

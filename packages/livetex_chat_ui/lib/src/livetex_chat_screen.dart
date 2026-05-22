@@ -121,20 +121,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
   /// Guard: a `loadHistory` call is in-flight; don't queue another.
   bool _loadingHistory = false;
 
-  /// Safety timeout that clears `_loadingHistory` if the server never
-  /// responds (lost packet, error frame, etc.).
-  Timer? _loadingHistoryTimeout;
-
-  /// Oldest message id and timestamp at the moment we fired the last
-  /// `loadHistory` call. Used in two ways:
-  /// - To detect that the history response arrived: a new message older than
-  ///   `_historyAnchorTime` means the batch carries historical data.
-  /// - Exhaustion: if no such message exists after the response, the server
-  ///   has no earlier messages.
-  String? _historyAnchorId;
-  DateTime? _historyAnchorTime;
-
-  /// Set once we detect that the server has no more older messages.
+  /// Set once the server returns 0 messages for a history request (exhausted).
   bool _historyExhausted = false;
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -194,37 +181,38 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     }
   }
 
-  void _loadOlderHistory() {
-    if (_loadingHistory || _historyExhausted || _messages.isEmpty) return;
-    // Find the oldest message (min createdAt). Pending messages use
-    // epoch-0 as a placeholder — skip them to avoid a nonsensical anchor.
+  Future<void> _loadOlderHistory() async {
+    // Oldest real message — skip optimistic `pending:` rows (their id is not
+    // a server id the backend would recognise).
     ChatMessage? oldest;
     for (final m in _messages) {
-      if (m.createdAt.millisecondsSinceEpoch == 0) continue;
+      if (m.id.startsWith("pending:")) continue;
       if (oldest == null || m.createdAt.isBefore(oldest.createdAt)) {
         oldest = m;
       }
     }
     if (oldest == null) return;
-
-    _loadingHistory = true;
-    _historyAnchorId = oldest.id;
-    _historyAnchorTime = oldest.createdAt;
-
-    // Safety valve: if no server response arrives within 5 s, unblock the
-    // guard so the next scroll-to-top can try again.
-    _loadingHistoryTimeout?.cancel();
-    _loadingHistoryTimeout = Timer(const Duration(seconds: 5), () {
-      if (mounted) {
-        setState(() {
-          _loadingHistory = false;
-          _historyAnchorId = null;
-          _historyAnchorTime = null;
-        });
-      }
+    setState(() => _loadingHistory = true);
+    final extentBefore =
+        _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
+    final pixelsBefore = _scroll.hasClients ? _scroll.position.pixels : 0.0;
+    final count = await _chat.loadHistory(messageId: oldest.id, offset: 20);
+    if (!mounted) return;
+    setState(() {
+      _loadingHistory = false;
+      if (count == 0) _historyExhausted = true;
     });
-
-    _chat.loadHistory(messageId: oldest.id, offset: 20);
+    // Older messages were prepended → content above the viewport grew.
+    // Compensate so the user stays on the message they were reading.
+    if (count > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scroll.hasClients) return;
+        final delta = _scroll.position.maxScrollExtent - extentBefore;
+        if (delta > 0) {
+          _scroll.jumpTo(pixelsBefore + delta);
+        }
+      });
+    }
   }
 
   void _wire() {
@@ -290,84 +278,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
         if (!mounted) return;
         setState(() {
           _messages = List.from(m);
-
-          // Detect whether this `messages` event is the response to an
-          // in-flight `loadHistory` call. Real-time events (new operator
-          // messages) only append to the tail — they never prepend anything
-          // older than the anchor. A history response, by contrast, must
-          // contain at least one message with createdAt < _historyAnchorTime
-          // (or none if the history is exhausted but the server still
-          // re-emits the full list).
-          //
-          // We distinguish the two cases to avoid clearing `_loadingHistory`
-          // prematurely on an interleaved real-time event — which would leave
-          // us unable to detect exhaustion correctly.
-          if (_loadingHistory) {
-            final anchorTime = _historyAnchorTime;
-            if (anchorTime == null) {
-              // Anchor not set — clear defensively.
-              _loadingHistoryTimeout?.cancel();
-              _loadingHistoryTimeout = null;
-              _loadingHistory = false;
-              _historyAnchorId = null;
-              _historyAnchorTime = null;
-            } else {
-              // Check whether any message in the new list is older than
-              // the anchor, which proves this is the history response.
-              final hasOlder = _messages.any(
-                (msg) =>
-                    msg.createdAt.millisecondsSinceEpoch != 0 &&
-                    msg.createdAt.isBefore(anchorTime),
-              );
-              // Also treat as the history response if the server returned
-              // nothing older (exhausted list) — detectable by checking that
-              // no message changed the oldest slot.  We use a time-based
-              // check: if the batch is a pure tail append, messages will
-              // never be older than anchorTime, so hasOlder == false means
-              // either (a) the server sent no earlier messages (exhaustion)
-              // or (b) we're still waiting.  We resolve the ambiguity with
-              // the safety timeout — here we only handle the "server did
-              // respond but had nothing older" case by inspecting the current
-              // oldest in the list.
-              final currentOldestId = () {
-                ChatMessage? o;
-                for (final msg in _messages) {
-                  if (msg.createdAt.millisecondsSinceEpoch == 0) continue;
-                  if (o == null || msg.createdAt.isBefore(o.createdAt)) {
-                    o = msg;
-                  }
-                }
-                return o?.id;
-              }();
-
-              if (hasOlder) {
-                // History response arrived with older messages — clear guard.
-                _loadingHistoryTimeout?.cancel();
-                _loadingHistoryTimeout = null;
-                _loadingHistory = false;
-                _historyAnchorId = null;
-                _historyAnchorTime = null;
-                // Not exhausted — more pages may exist.
-              } else if (currentOldestId == _historyAnchorId) {
-                // The oldest message id is unchanged — the server responded
-                // but had no earlier messages. Mark exhausted.
-                // This relies on the server delivering a VisitorUpdate even
-                // for empty getHistory responses (observed in practice via
-                // the VisitorUpdate handler in livetex_chat.dart).
-                // The protocol carries no explicit "no more pages" field;
-                // this is the correct heuristic given the current API.
-                _loadingHistoryTimeout?.cancel();
-                _loadingHistoryTimeout = null;
-                _loadingHistory = false;
-                _historyExhausted = true;
-                _historyAnchorId = null;
-                _historyAnchorTime = null;
-              }
-              // else: oldest changed but not older — ambiguous state,
-              // keep waiting for the real history response (timeout will
-              // eventually unblock if it never arrives).
-            }
-          }
         });
         _scrollToEnd();
       }),
@@ -439,7 +349,6 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       unawaited(s.cancel());
     }
     _typingTimer?.cancel();
-    _loadingHistoryTimeout?.cancel();
     _textCtrl.dispose();
     _scroll.removeListener(_onScroll);
     _scroll.dispose();
