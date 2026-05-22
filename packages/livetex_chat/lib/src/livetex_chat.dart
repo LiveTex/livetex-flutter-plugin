@@ -12,6 +12,7 @@ import "livetex_chat_config.dart";
 import "livetex_chat_errors.dart";
 import "livetex_connection_state.dart";
 import "livetex_trace.dart";
+import "send_result.dart";
 
 /// High-level chat session over Visitor API (same package as [LivetexVisitorSession]).
 final class LivetexChat {
@@ -44,6 +45,8 @@ final class LivetexChat {
 
   final Map<String, ChatMessage> _byId = {};
   final List<String> _order = [];
+  final Map<String, Completer<SendResult>> _pendingSends = {};
+  final Map<String, Completer<int>> _pendingHistory = {};
   VisitorDialogState? _lastDialog;
   DateTime? _lastTypingEmit;
   Stream<LivetexConnectionState> get connectionState => _connection.stream;
@@ -137,6 +140,8 @@ final class LivetexChat {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     try {
+      _markPendingAsFailed();
+      final wasConnected = _session != null;
       await _msgSub?.cancel();
       _msgSub = null;
       try {
@@ -144,9 +149,9 @@ final class LivetexChat {
       } catch (_) {}
       _session = null;
       _setConn(
-        _session == null
-            ? LivetexConnectionState.connecting
-            : LivetexConnectionState.reconnecting,
+        wasConnected
+            ? LivetexConnectionState.reconnecting
+            : LivetexConnectionState.connecting,
       );
       _emitTrace("connect");
       try {
@@ -205,6 +210,7 @@ final class LivetexChat {
   void _onSocketDone() {
     if (_disconnectRequested) return;
     _emitTrace("ws_done");
+    _markPendingAsFailed();
     _setConn(LivetexConnectionState.disconnected);
     _scheduleReconnect();
   }
@@ -252,13 +258,23 @@ final class LivetexChat {
         _lastDialog = m;
         if (!_dialog.isClosed) _dialog.add(m);
         _emitMessages();
-      case VisitorUpdate(:final messages):
+      case VisitorUpdate(:final messages, :final correlationId):
         for (final piece in messages) {
           _ingestUpdatePiece(piece);
         }
         _emitMessages();
+        if (correlationId != null) {
+          final c = _pendingHistory.remove(correlationId);
+          if (c != null && !c.isCompleted) c.complete(messages.length);
+        }
       case final VisitorResult r:
         _applyResult(r.correlationId, r.sentMessage, r.errors);
+        _resolveSend(
+          r.correlationId,
+          r.errors.isEmpty
+              ? const SendSuccess()
+              : SendError(r.errors.join(",")),
+        );
         _emitMessages();
       case VisitorApiError(:final code):
         _registerError(LivetexChatError(message: "ApiError: $code", code: code));
@@ -278,6 +294,27 @@ final class LivetexChat {
       case VisitorRawText():
       case VisitorUnknownMessage():
         break;
+    }
+  }
+
+  /// Вешает future на `correlationId`; резолвится из `_onServerMessage` когда
+  /// придёт `result` с тем же id, либо `SendTimeout` через 15 секунд.
+  Future<SendResult> _awaitSendResult(String correlationId) {
+    final completer = Completer<SendResult>();
+    _pendingSends[correlationId] = completer;
+    return completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {
+        _pendingSends.remove(correlationId);
+        return const SendTimeout();
+      },
+    );
+  }
+
+  void _resolveSend(String correlationId, SendResult result) {
+    final completer = _pendingSends.remove(correlationId);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(result);
     }
   }
 
@@ -386,6 +423,23 @@ final class LivetexChat {
     if (!_messagesCtrl.isClosed) _messagesCtrl.add(_snapshotMessages());
   }
 
+  /// Помечает оптимистичные `pending:*` сообщения, всё ещё в `sending`, как
+  /// `failed`. Зовётся при разрыве/пересоздании сессии — `result` для них уже
+  /// не придёт (старая подписка мертва), иначе спиннер висит вечно.
+  void _markPendingAsFailed() {
+    var changed = false;
+    for (final id in _byId.keys.toList()) {
+      final msg = _byId[id];
+      if (id.startsWith("pending:") &&
+          msg != null &&
+          msg.sendState == ChatMessageSendState.sending) {
+        _byId[id] = msg.copyWith(sendState: ChatMessageSendState.failed);
+        changed = true;
+      }
+    }
+    if (changed) _emitMessages();
+  }
+
   void sendRawJson(String json) => _session?.sendRawJson(json);
 
   void sendText(String text) {
@@ -482,7 +536,7 @@ final class LivetexChat {
     }
   }
 
-  void sendRating({
+  Future<SendResult> sendRating({
     required String rateType,
     required String value,
     String? comment,
@@ -493,7 +547,7 @@ final class LivetexChat {
       // shows it next to the UI's TOP onSubmit log. Remove once the
       // closed-dialog rating issue is confirmed/fixed.
       _emitTrace("sendRating SKIPPED (no session) type=$rateType value=$value");
-      return;
+      return Future.value(const SendNotConnected());
     }
     final corr = _nextCorrelation("rate");
     final json = VisitorOutgoing.rating(
@@ -504,16 +558,21 @@ final class LivetexChat {
     );
     _emitTrace("ws_out $json");
     s.sendRawJson(json);
+    return _awaitSendResult(corr);
   }
 
-  void sendAttributes({
+  Future<SendResult> sendAttributes({
     required String correlationId,
     String? name,
     String? phone,
     String? email,
     required Map<String, String> attributes,
   }) {
-    _session?.sendRawJson(
+    final s = _session;
+    if (s == null) {
+      return Future.value(const SendNotConnected());
+    }
+    s.sendRawJson(
       VisitorOutgoing.attributes(
         correlationId: correlationId,
         name: name,
@@ -522,27 +581,45 @@ final class LivetexChat {
         attributes: attributes,
       ),
     );
+    return _awaitSendResult(correlationId);
   }
 
-  void selectDepartment({required String correlationId, required String id}) {
+  Future<SendResult> selectDepartment({
+    required String correlationId,
+    required String id,
+  }) {
     final s = _session;
     if (s == null) {
       _emitTrace("selectDepartment SKIPPED (no session) id=$id");
-      return;
+      return Future.value(const SendNotConnected());
     }
     final json = VisitorOutgoing.department(correlationId: correlationId, id: id);
     _emitTrace("ws_out $json");
     s.sendRawJson(json);
+    return _awaitSendResult(correlationId);
   }
 
-  void loadHistory({required String messageId, int offset = 0}) {
+  /// Запрашивает историю до [messageId]. Возвращает число сообщений в ответе
+  /// сервера: 0 — более старых сообщений нет (история исчерпана).
+  Future<int> loadHistory({required String messageId, int offset = 0}) {
+    final s = _session;
+    if (s == null) return Future.value(0);
     final corr = _nextCorrelation("hist");
-    _session?.sendRawJson(
+    final completer = Completer<int>();
+    _pendingHistory[corr] = completer;
+    s.sendRawJson(
       VisitorOutgoing.getHistory(
         correlationId: corr,
         messageId: messageId,
         offset: offset,
       ),
+    );
+    return completer.future.timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        _pendingHistory.remove(corr);
+        return 0;
+      },
     );
   }
 
@@ -555,6 +632,14 @@ final class LivetexChat {
 
   Future<void> dispose() async {
     await disconnect();
+    for (final c in _pendingSends.values) {
+      if (!c.isCompleted) c.complete(const SendTimeout());
+    }
+    _pendingSends.clear();
+    for (final c in _pendingHistory.values) {
+      if (!c.isCompleted) c.complete(0);
+    }
+    _pendingHistory.clear();
     await _connection.close();
     await _dialog.close();
     await _messagesCtrl.close();

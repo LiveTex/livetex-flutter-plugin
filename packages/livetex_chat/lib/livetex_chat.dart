@@ -22,4 +22,5 @@ export "src/livetex_trace.dart"
 export "src/livetex_chat_config.dart";
 export "src/livetex_chat_errors.dart";
 export "src/livetex_connection_state.dart";
+export "src/send_result.dart";
 export "src/livetex_chat.dart";

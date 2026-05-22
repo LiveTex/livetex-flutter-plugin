@@ -269,7 +269,29 @@ final class LivetexVisitorSession {
       if (streamed.statusCode != 200) {
         throw LivetexVisitorUploadException(streamed.statusCode, body);
       }
-      return body;
+      String? rawUrl;
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic> && decoded["url"] is String) {
+          rawUrl = decoded["url"] as String;
+        }
+      } catch (_) {
+        // Body is not JSON — use the plain-string fallback below.
+      }
+      // Fallback: some environments may answer with a plain URL string.
+      rawUrl ??= body.trim();
+      // Validate the scheme: this URL goes verbatim into an outgoing `file`
+      // frame and is echoed in operator panels. Reject anything that isn't
+      // http(s) (`javascript:`, `file:`, …) rather than passing it through.
+      final parsed = Uri.tryParse(rawUrl);
+      if (parsed == null ||
+          (parsed.scheme != "https" && parsed.scheme != "http")) {
+        throw LivetexVisitorUploadException(
+          streamed.statusCode,
+          "upload response is not a valid http(s) URL",
+        );
+      }
+      return rawUrl;
     } finally {
       if (ownClient) client.close();
     }

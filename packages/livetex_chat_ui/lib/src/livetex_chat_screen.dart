@@ -117,6 +117,14 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
 
   bool _afterConnectDone = false;
 
+  // ── History paging ────────────────────────────────────────────────────────
+  /// Guard: a `loadHistory` call is in-flight; don't queue another.
+  bool _loadingHistory = false;
+
+  /// Set once the server returns 0 messages for a history request (exhausted).
+  bool _historyExhausted = false;
+  // ─────────────────────────────────────────────────────────────────────────
+
   final List<_PendingBottom> _bottomQueue = [];
   List<DepartmentItem> _pendingDepartments = const [];
 
@@ -161,6 +169,50 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     // auto-follow on.
     final atBottom = pos.pixels >= pos.maxScrollExtent - 80;
     if (atBottom != _userAtBottom) _userAtBottom = atBottom;
+
+    // Auto-load older history when the user scrolls near the top.
+    final nearTop = pos.pixels <= 80;
+    if (nearTop &&
+        _conn == LivetexConnectionState.connected &&
+        !_loadingHistory &&
+        !_historyExhausted &&
+        _messages.isNotEmpty) {
+      _loadOlderHistory();
+    }
+  }
+
+  Future<void> _loadOlderHistory() async {
+    // Oldest real message — skip optimistic `pending:` rows (their id is not
+    // a server id the backend would recognise).
+    ChatMessage? oldest;
+    for (final m in _messages) {
+      if (m.id.startsWith("pending:")) continue;
+      if (oldest == null || m.createdAt.isBefore(oldest.createdAt)) {
+        oldest = m;
+      }
+    }
+    if (oldest == null) return;
+    setState(() => _loadingHistory = true);
+    final extentBefore =
+        _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
+    final pixelsBefore = _scroll.hasClients ? _scroll.position.pixels : 0.0;
+    final count = await _chat.loadHistory(messageId: oldest.id, offset: 20);
+    if (!mounted) return;
+    setState(() {
+      _loadingHistory = false;
+      if (count == 0) _historyExhausted = true;
+    });
+    // Older messages were prepended → content above the viewport grew.
+    // Compensate so the user stays on the message they were reading.
+    if (count > 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scroll.hasClients) return;
+        final delta = _scroll.position.maxScrollExtent - extentBefore;
+        if (delta > 0) {
+          _scroll.jumpTo(pixelsBefore + delta);
+        }
+      });
+    }
   }
 
   void _wire() {
@@ -224,7 +276,9 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       }),
       _chat.messages.listen((m) {
         if (!mounted) return;
-        setState(() => _messages = List.from(m));
+        setState(() {
+          _messages = List.from(m);
+        });
         _scrollToEnd();
       }),
       _chat.errors.listen((e) {
@@ -587,7 +641,7 @@ class _BottomRatingDescriptor {
   const _BottomRatingDescriptor({required this.rate, required this.onSubmit});
 
   final DialogRateState rate;
-  final void Function(String value, String? comment) onSubmit;
+  final Future<SendResult> Function(String value, String? comment) onSubmit;
 }
 
 class _MessageList extends StatelessWidget {
