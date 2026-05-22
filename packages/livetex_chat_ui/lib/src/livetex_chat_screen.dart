@@ -139,6 +139,18 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     super.initState();
     _chat = widget.chat ?? LivetexChat(widget.config);
     _ownChat = widget.chat == null;
+    // Seed the mirror from the (possibly already-connected) chat before wiring
+    // listeners: LivetexChat's connection/messages/dialog streams are broadcast
+    // and do NOT replay their last value to a new listener. When a long-lived
+    // LivetexChat is re-attached (host keeps the chat, user re-opens this
+    // screen) it is already `connected` and won't re-emit — so without seeding
+    // the mirror stays at its defaults: a stale "Соединение потеряно" banner
+    // over an empty list, with Повторить a no-op because connect() finds the
+    // chat connected and emits nothing. On a fresh chat the getters return
+    // those same defaults, so seeding is a no-op there.
+    _conn = _chat.connectionNow;
+    _messages = _chat.currentMessages;
+    _dialog = _chat.currentDialog;
     _scroll.addListener(_onScroll);
     WidgetsBinding.instance.addObserver(this);
     _wire();
