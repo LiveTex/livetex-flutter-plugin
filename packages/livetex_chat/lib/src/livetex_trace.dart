@@ -1,4 +1,4 @@
-const String livetexChatPackageVersion = "0.6.0";
+const String livetexChatPackageVersion = "0.6.1";
 
 String livetexTraceFormatLine(String message) =>
     "${DateTime.now().toUtc().toIso8601String()} $message";
