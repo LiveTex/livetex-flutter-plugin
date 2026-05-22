@@ -56,44 +56,78 @@ dependencies:
 
 ### 2.2. Инициализация в `main()`
 
-Фоновый обработчик push **обязан** регистрироваться до `runApp`:
+Фоновый обработчик push **обязан** регистрироваться до `runApp`. В SDK это
+сводится к одному вызову — импортировать `firebase_core` / `firebase_messaging`
+в приложении не нужно:
 
 ```dart
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:livetex_chat_push/livetex_chat_push.dart';
+import "package:livetex_chat_push/livetex_chat_push.dart";
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  FirebaseMessaging.onBackgroundMessage(livetexFirebaseBackgroundHandler);
+Future<void> main() async {
+  await livetexSetupPush();
   runApp(const MyApp());
 }
 ```
 
-### 2.3. Создание `LivetexChatPush`
+`livetexSetupPush()` поднимает Firebase (если ещё не поднят) и регистрирует
+фоновый обработчик LiveTex. Нативная настройка Firebase — в разделе 3.
 
-`LivetexChat` держите на уровне приложения (он должен переживать открытие/закрытие
-экрана чата). Рядом создайте `LivetexChatPush`:
+### 2.3. Chat и push
+
+`LivetexChat` и `LivetexChatPush` — на уровне приложения, не внутри экрана чата.
 
 ```dart
-final chat = LivetexChat(LivetexChatConfig(touchPoint: '<ваш ключ>'));
+final chat = LivetexChat(
+  LivetexChatConfig(touchPoint: "<touchPoint>"),
+);
 
 final push = LivetexChatPush(
   chat: chat,
-  onNotificationTap: () {
-    // Открыть экран чата. Используйте GlobalKey<NavigatorState>,
-    // т.к. тап может прийти когда виджет-дерево ещё не построено.
-  },
+  onNotificationTap: openChat,
 );
 await push.initialize();
 ```
 
-`initialize()` сам: запросит разрешение на уведомления (системный диалог),
-получит device-token и передаст его в LiveTex, подпишется на входящие push и
-на жизненный цикл приложения (разрыв сокета при сворачивании).
+`initialize()` запрашивает разрешение на уведомления, регистрирует device-token в LiveTex,
+подписывается на push и жизненный цикл (разрыв сокета при сворачивании).
 
-При завершении — `await push.dispose()`.
+Экран:
+
+```dart
+LivetexChatScreen(
+  config: chat.config,
+  chat: chat,
+  title: "Чат",
+)
+```
+
+При завершении: `await push.dispose()`, `chat.dispose()`.
+
+### 2.4. Открытие чата по push
+
+`onNotificationTap` вызывается без `BuildContext` (cold start, фон). Используйте
+`GlobalKey<NavigatorState>` на `MaterialApp`:
+
+```dart
+final navigatorKey = GlobalKey<NavigatorState>();
+
+void openChat() {
+  navigatorKey.currentState?.push(
+    MaterialPageRoute(
+      builder: (_) => LivetexChatScreen(
+        config: chat.config,
+        chat: chat,
+        title: "Чат",
+      ),
+    ),
+  );
+}
+
+MaterialApp(
+  navigatorKey: navigatorKey,
+  home: /* ... */,
+);
+```
 
 ---
 

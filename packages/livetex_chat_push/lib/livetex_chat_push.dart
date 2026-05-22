@@ -30,8 +30,7 @@ const NotificationDetails _notificationDetails = NotificationDetails(
 /// (`data: {text: ...}`) без notification-блока — OS сама уведомление не
 /// покажет, поэтому строим локальное уведомление здесь.
 ///
-/// Хост-приложение обязано зарегистрировать его в `main()` ДО `runApp`:
-/// `FirebaseMessaging.onBackgroundMessage(livetexFirebaseBackgroundHandler);`
+/// Регистрируется через [livetexSetupPush] в `main()` до `runApp`.
 @pragma("vm:entry-point")
 Future<void> livetexFirebaseBackgroundHandler(RemoteMessage message) async {
   if (Firebase.apps.isEmpty) {
@@ -48,6 +47,20 @@ Future<void> livetexFirebaseBackgroundHandler(RemoteMessage message) async {
     _notificationDetails,
     payload: _notificationPayload,
   );
+}
+
+/// Подготовка push в `main()` **до** `runApp`: `WidgetsFlutterBinding`,
+/// [Firebase.initializeApp] (если ещё не вызван) и регистрация
+/// [livetexFirebaseBackgroundHandler].
+///
+/// Firebase в проекте должен быть настроен заранее (`flutterfire configure`,
+/// `google-services.json` / `GoogleService-Info.plist`) — см. PUSH_INTEGRATION.md.
+Future<void> livetexSetupPush() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp();
+  }
+  FirebaseMessaging.onBackgroundMessage(livetexFirebaseBackgroundHandler);
 }
 
 /// Оркестрация push-уведомлений для [LivetexChat].
