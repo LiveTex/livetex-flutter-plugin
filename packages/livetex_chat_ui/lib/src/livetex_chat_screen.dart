@@ -380,7 +380,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
     _diag("file pick start");
     final FilePickerResult? r;
     try {
-      r = await FilePicker.platform.pickFiles(
+      r = await FilePicker.pickFiles(
         withData: true,
         allowMultiple: false,
       );

@@ -13,7 +13,7 @@ dependencies:
   livetex_chat:
     path: ../livetex_chat
   cached_network_image: ^3.4.1
-  file_picker: ^10.3.8
+  file_picker: ^11.0.2
   flutter_cache_manager: ^3.4.1
   intl: ^0.20.2
   url_launcher: ^6.3.2
