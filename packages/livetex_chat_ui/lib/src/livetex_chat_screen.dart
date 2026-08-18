@@ -1,6 +1,7 @@
 import "dart:async";
 import "dart:developer" as developer;
 import "dart:io";
+import "dart:typed_data";
 
 import "package:file_picker/file_picker.dart";
 import "package:flutter/foundation.dart" show kDebugMode;
@@ -378,12 +379,9 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
 
   Future<void> _pickAndSendFile() async {
     _diag("file pick start");
-    final FilePickerResult? r;
+    final PlatformFile? pf;
     try {
-      r = await FilePicker.pickFiles(
-        withData: true,
-        allowMultiple: false,
-      );
+      pf = await FilePicker.pickFile();
     } catch (e) {
       _diag("file pick FAILED: $e");
       if (mounted) {
@@ -393,13 +391,11 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       }
       return;
     }
-    if (r == null || r.files.isEmpty) {
+    if (pf == null) {
       _diag("file pick cancelled");
       return;
     }
-    final pf = r.files.single;
-    _diag("file picked size=${pf.size} hasPath=${pf.path != null} "
-        "hasBytes=${pf.bytes != null}");
+    _diag("file picked hasPath=${pf.path != null}");
     if (pf.path != null && pf.path!.isNotEmpty) {
       try {
         await _chat.sendFile(File(pf.path!));
@@ -408,9 +404,11 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
       }
       return;
     }
-    final bytes = pf.bytes;
-    if (bytes == null) {
-      _diag("file has neither path nor bytes — aborting");
+    final Uint8List bytes;
+    try {
+      bytes = await pf.readAsBytes();
+    } catch (e) {
+      _diag("file has no path and readAsBytes FAILED: $e — aborting");
       return;
     }
     final name = pf.name.isEmpty

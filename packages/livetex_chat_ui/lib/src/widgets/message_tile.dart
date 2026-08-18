@@ -347,7 +347,7 @@ class _OperatorAvatar extends StatelessWidget {
             ? CachedNetworkImage(
                 imageUrl: avatarUrl!,
                 fit: BoxFit.cover,
-                errorWidget: (_, __, ___) => Icon(
+                errorWidget: (_, _, _) => Icon(
                   Icons.support_agent,
                   size: 18,
                   color: theme.systemText,
@@ -415,7 +415,7 @@ class _MessageBubble extends StatelessWidget {
                     width: 200,
                     height: 200,
                     fit: BoxFit.cover,
-                    placeholder: (_, __) => SizedBox(
+                    placeholder: (_, _) => SizedBox(
                       width: 200,
                       height: 200,
                       child: Center(
@@ -429,7 +429,7 @@ class _MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ),
-                    errorWidget: (_, __, ___) => SizedBox(
+                    errorWidget: (_, _, _) => SizedBox(
                       width: 200,
                       height: 200,
                       child: Icon(
