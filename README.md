@@ -1,6 +1,6 @@
 # livetex-flutter-plugin
 
-Dart `>=3.6`. Flutter `>=3.27`.
+Dart `>=3.11`. Flutter `>=3.41.6`. iOS `>=14`.
 
 ## Документация
 
