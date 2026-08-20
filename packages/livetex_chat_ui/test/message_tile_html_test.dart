@@ -1,4 +1,5 @@
 import "package:flutter/material.dart";
+import "package:flutter/services.dart";
 import "package:flutter_test/flutter_test.dart";
 import "package:livetex_chat/livetex_chat.dart";
 import "package:livetex_chat_ui/livetex_chat_ui.dart";
@@ -50,6 +51,29 @@ class _FakeUrlLauncher extends UrlLauncherPlatform {
   }
 }
 
+/// Taps "Скопировать" in the already-open actions menu and returns what was
+/// handed to `Clipboard.setData` — the copy path has no public getter, so
+/// this intercepts the platform channel `Clipboard.setData` actually calls.
+Future<String?> _tapCopyAndCaptureClipboard(WidgetTester tester) async {
+  String? copied;
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform,
+    (call) async {
+      if (call.method == "Clipboard.setData") {
+        copied = (call.arguments as Map)["text"] as String?;
+      }
+      return null;
+    },
+  );
+  await tester.tap(find.text("Скопировать"));
+  await tester.pumpAndSettle();
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform,
+    null,
+  );
+  return copied;
+}
+
 void main() {
   testWidgets("incoming html message renders without raw tags",
       (tester) async {
@@ -84,5 +108,64 @@ void main() {
     // The recognizer handled the tap, not `SelectableText.onTap` — no
     // actions menu popped up alongside the link launch.
     expect(find.byType(BottomSheet), findsNothing);
+  });
+
+  testWidgets("tap on plain (non-link) incoming text opens the actions menu",
+      (tester) async {
+    await tester.pumpWidget(host(MessageTile(message: msg("привет"))));
+    await tester.tap(find.text("привет"));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BottomSheet), findsOneWidget);
+  });
+
+  testWidgets("copy strips html tags for an incoming message", (tester) async {
+    await tester
+        .pumpWidget(host(MessageTile(message: msg("<b>жирный</b> текст"))));
+    await tester.tap(find.textContaining("жирный"));
+    await tester.pumpAndSettle();
+
+    expect(await _tapCopyAndCaptureClipboard(tester), "жирный текст");
+  });
+
+  testWidgets(
+      "copy keeps a visitor message verbatim even when it looks like html",
+      (tester) async {
+    // "5 < 6 > 3" trips the loose Android-parity containsHtml regex (it
+    // matches any "<...>" span, not just real tags) — for a visitor's own
+    // message this must NOT be run through plainTextOfMessage, or copy
+    // would silently strip the "< 6 >" the visitor actually typed.
+    await tester.pumpWidget(
+        host(MessageTile(message: msg("5 < 6 > 3", isVisitor: true))));
+    await tester.tap(find.text("5 < 6 > 3"));
+    await tester.pumpAndSettle();
+
+    expect(await _tapCopyAndCaptureClipboard(tester), "5 < 6 > 3");
+  });
+
+  testWidgets("system tile link tap still fires (Text.rich, non-selectable)",
+      (tester) async {
+    final fake = _FakeUrlLauncher();
+    UrlLauncherPlatform.instance = fake;
+
+    await tester.pumpWidget(host(MessageTile(
+        message: msg('<a href="https://livetex.ru">ссылка</a>',
+            creatorType: "system"))));
+    await tester.tap(find.textContaining("ссылка"));
+    await tester.pumpAndSettle();
+
+    expect(fake.launchedUrl, "https://livetex.ru");
+  });
+
+  testWidgets(
+      "quote-reply message: body renders parsed html, quote line renders plain",
+      (tester) async {
+    await tester.pumpWidget(host(MessageTile(
+        message:
+            msg("> quoted <b>tag</b> line\nbody with <b>html</b>"))));
+
+    expect(find.textContaining("<b>"), findsNothing);
+    expect(find.textContaining("quoted tag line"), findsOneWidget);
+    expect(find.textContaining("body with html"), findsOneWidget);
   });
 }

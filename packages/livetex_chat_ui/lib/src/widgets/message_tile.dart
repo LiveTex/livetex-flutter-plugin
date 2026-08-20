@@ -140,7 +140,10 @@ class MessageTile extends StatelessWidget {
   /// Returns text suitable for copy/quote actions: file-only messages
   /// fall back to the filename or URL, quote-reply messages return the
   /// body (without the `"> ...\n"` prefix) to match native behavior. HTML
-  /// content is reduced to plain text — copy/quote should never leak tags.
+  /// is reduced to plain text for incoming messages only — `containsHtml`
+  /// is the loose Android-parity regex and also matches ordinary prose like
+  /// "5 < 6 > 3"; running it on a visitor's own (never-parsed, raw-rendered)
+  /// message would silently strip characters the visitor actually typed.
   String? _actionableContent() {
     final raw = message.text;
     String? content;
@@ -152,7 +155,7 @@ class MessageTile extends StatelessWidget {
     } else {
       content = message.fileUrl;
     }
-    return content != null && containsHtml(content)
+    return content != null && !message.isVisitor && containsHtml(content)
         ? plainTextOfMessage(content)
         : content;
   }
