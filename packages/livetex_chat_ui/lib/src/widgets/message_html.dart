@@ -14,13 +14,33 @@ final _htmlTagPattern = RegExp(r'''<("[^"]*"|'[^']*'|[^'">])*>''');
 /// <("[^"]*"|'[^']*'|[^'">])*>
 bool containsHtml(String text) => _htmlTagPattern.hasMatch(text);
 
+// Android's Html.fromHtml tokenizer only treats "<" as a possible tag start
+// when followed by a letter, "/", or "!" — the loose containsHtml-style
+// regex alone would also match ordinary prose like "5 < 6 > 3" or
+// "if x<10 then y>5", silently deleting the ">"-terminated chunk as a fake
+// tag. This is a second, cheap acceptance check the tokenizer applies
+// before trusting a regex match as a real tag — containsHtml itself (used
+// only to decide whether to enter the tokenizer at all) stays unchanged.
+bool _looksLikeTagStart(String source, int i) {
+  if (i + 1 >= source.length) return false;
+  final c = source.codeUnitAt(i + 1);
+  return (c >= 0x41 && c <= 0x5A) || // A-Z
+      (c >= 0x61 && c <= 0x7A) || // a-z
+      c == 0x2F || // /
+      c == 0x21; // !
+}
+
 // ponytail: the mandated containsHtml regex backtracks quadratically on
 // input with many "<" and no matching ">" (measured ~7.7s at the 32768-char
 // cap). Counting "<" is one cheap O(n) pass and runs before the regex ever
 // touches the string, bounding the worst case regardless of input shape —
 // callers must run this (and the length cap) before calling containsHtml
-// or walking the string.
-const _maxAngleBrackets = 128;
+// or walking the string. 512 bounds the worst case at ~16.8M char ops
+// (512 * 32768) while comfortably covering a real bot menu of ~30
+// "<li><b>..</b></li>" items (120+ brackets) — the exact content this
+// feature exists to render, which a tighter cap would silently regress to
+// raw visible tags.
+const _maxAngleBrackets = 512;
 
 bool _tooManyAngleBrackets(String source) {
   var count = 0;
@@ -55,8 +75,10 @@ final _entityPattern = RegExp(r"&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);");
 // A numeric entity can spell out any integer int.tryParse accepts — code
 // points beyond U+10FFFF (or negative) make String.fromCharCode throw, so
 // out-of-range codes fall back to the entity text as-is instead of
-// crashing the build.
-bool _isValidCodePoint(int code) => code >= 0 && code <= 0x10FFFF;
+// crashing the build. Surrogate halves (U+D800..U+DFFF) don't throw but
+// produce a lone surrogate in the output string — excluded too.
+bool _isValidCodePoint(int code) =>
+    code >= 0 && code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF);
 
 String _decodeEntities(String text) {
   return text.replaceAllMapped(_entityPattern, (m) {
@@ -108,9 +130,13 @@ _Tag _parseTagToken(String token) {
   final nameEnd = body.indexOf(_tagNameEnd);
   final name = (nameEnd == -1 ? body : body.substring(0, nameEnd)).toLowerCase();
   final hrefMatch = _hrefPattern.firstMatch(body);
+  // Trimmed before validation/use — `href=" https://x.ru "` must still
+  // resolve to a real scheme instead of failing closed on Uri.tryParse,
+  // and the leading/trailing space must not leak into the tapped URL.
   final href = hrefMatch == null
       ? null
-      : _decodeEntities(hrefMatch[2] ?? hrefMatch[3] ?? hrefMatch[4] ?? "");
+      : _decodeEntities(hrefMatch[2] ?? hrefMatch[3] ?? hrefMatch[4] ?? "")
+          .trim();
   return (name: name, closing: closing, href: href);
 }
 
@@ -219,16 +245,21 @@ List<_Run> _walkNodes(String source) {
 
   while (i < source.length) {
     final start = i;
+    Match? tagMatch;
     while (i < source.length) {
-      if (source[i] == "<" && _htmlTagPattern.matchAsPrefix(source, i) != null) {
-        break;
+      if (source[i] == "<" && _looksLikeTagStart(source, i)) {
+        final m = _htmlTagPattern.matchAsPrefix(source, i);
+        if (m != null) {
+          tagMatch = m;
+          break;
+        }
       }
       i++;
     }
     if (i > start) emitText(_decodeEntities(source.substring(start, i)));
     if (i >= source.length) break;
 
-    final m = _htmlTagPattern.matchAsPrefix(source, i)!;
+    final m = tagMatch!;
     final tag = _parseTagToken(m[0]!);
     i = m.end;
 
@@ -242,6 +273,12 @@ List<_Run> _walkNodes(String source) {
         final removed = stack.sublist(idx);
         stack.removeRange(idx, stack.length);
         styleDepth -= removed.where((f) => f.styled).length;
+        // Block-level close needs the same break the open tag would have
+        // set — otherwise "<p>Hello</p>Goodbye" glues into "HelloGoodbye".
+        // Lazy pendingBreak still means no trailing blank when nothing
+        // follows.
+        if (tag.name == "p" && runs.isNotEmpty) pendingBreak = "\n\n";
+        if (tag.name == "li" && runs.isNotEmpty) pendingBreak = "\n";
       }
       continue;
     }
@@ -291,8 +328,16 @@ List<_Run> _walkNodes(String source) {
   return runs;
 }
 
+// The email alternative's quantifiers are bounded (unlike the URL/www
+// alternatives, which only use a single unambiguous negated character
+// class) — an unbounded "local@domain" shape backtracks quadratically on
+// a long run of email-class chars with no "@" (e.g. "a" * 32768, plain
+// text with zero "<", so neither the length cap's HTML branches nor the
+// angle-bracket guard apply): each of the n start positions does O(n)
+// backtracking. RFC-generous bounds make per-position work constant.
 final _linkPattern = RegExp(
-  r'(https?://[^\s<>"]+)|(www\.[^\s<>"]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,})',
+  r'(https?://[^\s<>"]+)|(www\.[^\s<>"]+)|'
+  r'([A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}\.[A-Za-z]{2,24})',
   caseSensitive: false,
 );
 const _trailingPunct = {".", ",", ";", ":", "!", "?", ")"};

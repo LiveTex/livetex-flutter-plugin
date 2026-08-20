@@ -88,6 +88,15 @@ void main() {
     expect(find.textContaining("<b>привет</b>"), findsOneWidget);
   });
 
+  testWidgets("incoming message with bare-angle-bracket math displays intact",
+      (tester) async {
+    // "5 < 6 > 3" trips the loose containsHtml regex the same way real
+    // tags do, but "6" isn't a letter/"/"/"!" so the tokenizer must not
+    // treat "< 6 >" as a fake tag and delete it.
+    await tester.pumpWidget(host(MessageTile(message: msg("5 < 6 > 3"))));
+    expect(find.textContaining("5 < 6 > 3"), findsOneWidget);
+  });
+
   testWidgets("system html message renders without raw tags", (tester) async {
     await tester.pumpWidget(host(MessageTile(
         message:

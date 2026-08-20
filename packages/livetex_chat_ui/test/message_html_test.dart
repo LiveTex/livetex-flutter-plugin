@@ -155,6 +155,24 @@ void main() {
       expect(span.toPlainText(), "intro\n\npara");
     });
 
+    test("closing p breaks from what follows, not just what precedes", () {
+      final span = buildMessageSpan(
+        "<p>a</p>b",
+        style: style,
+        linkColor: linkColor,
+      );
+      expect(span.toPlainText(), "a\n\nb");
+    });
+
+    test("closing li (via closing ul) breaks from what follows", () {
+      final span = buildMessageSpan(
+        "<ul><li>a</li></ul>text",
+        style: style,
+        linkColor: linkColor,
+      );
+      expect(span.toPlainText(), "• a\ntext");
+    });
+
     test("ul/li render each item on its own line prefixed with a bullet", () {
       final span = buildMessageSpan(
         "<ul><li>Один</li><li>Два</li></ul>",
@@ -359,6 +377,43 @@ void main() {
       expect(span.toPlainText(), "&#1114112; &#x110000;");
     });
 
+    test("surrogate-range numeric entity stays literal", () {
+      final span = buildMessageSpan(
+        "<b>&#xD800;</b>",
+        style: style,
+        linkColor: linkColor,
+      );
+      expect(span.toPlainText(), "&#xD800;");
+    });
+
+    test("href with surrounding whitespace is trimmed then validated", () {
+      String? opened;
+      final recs = <GestureRecognizer>[];
+      final span = buildMessageSpan(
+        '<a href=" https://livetex.ru ">ссылка</a>',
+        style: style,
+        linkColor: linkColor,
+        onOpenLink: (u) => opened = u,
+        recognizers: recs,
+      );
+      final link = leaves(span).singleWhere((l) => l.$3);
+      expect(link.$1, "ссылка");
+      (recs.single as TapGestureRecognizer).onTap!();
+      expect(opened, "https://livetex.ru");
+    });
+
+    test("href with surrounding whitespace still rejects a bad scheme", () {
+      final span = buildMessageSpan(
+        '<a href=" javascript:alert(1)">кликни</a>',
+        style: style,
+        linkColor: linkColor,
+        onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
+      );
+      expect(span.toPlainText(), "кликни");
+      expect(leaves(span).any((l) => l.$3), isFalse);
+    });
+
     test("entities decoded inside href attribute value", () {
       String? opened;
       final recs = <GestureRecognizer>[];
@@ -466,6 +521,31 @@ void main() {
       final l = leaves(span)[0];
       expect(l.$2?.decoration, TextDecoration.underline);
       expect(l.$3, isFalse);
+    });
+
+    test("a long unbroken email-shaped run bails fast (no '<' involved)", () {
+      final input = "a" * 32768;
+      final stopwatch = Stopwatch()..start();
+      final span = buildMessageSpan(input, style: style, linkColor: linkColor);
+      stopwatch.stop();
+      expect(span.toPlainText(), input);
+      expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+    });
+
+    test("bare-angle-bracket math is not mistaken for a tag", () {
+      final span = buildMessageSpan(
+        "5 < 6 > 3",
+        style: style,
+        linkColor: linkColor,
+      );
+      expect(span.toPlainText(), "5 < 6 > 3");
+    });
+
+    test("plainTextOfMessage keeps '<' followed by a digit literal", () {
+      expect(
+        plainTextOfMessage("if x<10 then y>5"),
+        "if x<10 then y>5",
+      );
     });
   });
 
