@@ -1,6 +1,7 @@
 import "dart:math" as math;
 
 import "package:cached_network_image/cached_network_image.dart";
+import "package:flutter/gestures.dart";
 import "package:flutter/material.dart";
 import "package:flutter/services.dart";
 import "package:flutter_cache_manager/flutter_cache_manager.dart";
@@ -11,6 +12,7 @@ import "package:share_plus/share_plus.dart";
 import "package:url_launcher/url_launcher.dart";
 
 import "../livetex_chat_theme.dart";
+import "message_html.dart";
 
 /// Detects an image based on URL extension. Used both for `file` messages
 /// with image URLs and for `text` messages whose content is a bare image URL.
@@ -137,17 +139,25 @@ class MessageTile extends StatelessWidget {
 
   /// Returns text suitable for copy/quote actions: file-only messages
   /// fall back to the filename or URL, quote-reply messages return the
-  /// body (without the `"> ...\n"` prefix) to match native behavior.
+  /// body (without the `"> ...\n"` prefix) to match native behavior. HTML
+  /// is reduced to plain text for incoming messages only — `containsHtml`
+  /// is the loose Android-parity regex and also matches ordinary prose like
+  /// "5 < 6 > 3"; running it on a visitor's own (never-parsed, raw-rendered)
+  /// message would silently strip characters the visitor actually typed.
   String? _actionableContent() {
     final raw = message.text;
+    String? content;
     if (raw != null && raw.isNotEmpty) {
       final parts = _splitQuote(raw);
-      return parts?.body ?? raw;
+      content = parts?.body ?? raw;
+    } else if (message.fileName != null && message.fileName!.isNotEmpty) {
+      content = message.fileName;
+    } else {
+      content = message.fileUrl;
     }
-    if (message.fileName != null && message.fileName!.isNotEmpty) {
-      return message.fileName;
-    }
-    return message.fileUrl;
+    return content != null && !message.isVisitor && containsHtml(content)
+        ? plainTextOfMessage(content)
+        : content;
   }
 
   Future<void> _showMessageActions(BuildContext context) async {
@@ -210,11 +220,17 @@ class _TextWithOptionalQuote extends StatelessWidget {
   const _TextWithOptionalQuote({
     required this.text,
     required this.fg,
+    required this.isVisitor,
     this.onTap,
   });
 
   final String text;
   final Color fg;
+
+  /// Visitor messages keep the raw plain-text path — HTML parsing on
+  /// incoming (non-visitor) messages only, matching native sdk-android
+  /// (`MessagesAdapter` never parses the visitor's own bubble).
+  final bool isVisitor;
 
   /// Short tap on text → opens the action menu (Copy / Quote). Long-press
   /// stays with `SelectableText` so the OS text-selection handles still
@@ -224,14 +240,19 @@ class _TextWithOptionalQuote extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = LivetexChatTheme.of(context);
+    final style = TextStyle(fontSize: 16, color: fg);
     final parts = _splitQuote(text);
     if (parts == null) {
-      return SelectableText(
-        text,
-        onTap: onTap,
-        style: TextStyle(fontSize: 16, color: fg),
-      );
+      return isVisitor
+          ? SelectableText(text, onTap: onTap, style: style)
+          : _HtmlText(text: text, style: style, onTap: onTap);
     }
+    // The quote header is always a decorative, non-selectable strip — if it
+    // carries HTML (a quoted incoming message), reduce it to plain text
+    // instead of rendering tags/links there.
+    final quoteText = containsHtml(parts.quote)
+        ? plainTextOfMessage(parts.quote)
+        : parts.quote;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -250,7 +271,7 @@ class _TextWithOptionalQuote extends StatelessWidget {
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text(
-                    parts.quote,
+                    quoteText,
                     style: TextStyle(
                       fontSize: 14,
                       color: fg.withValues(alpha: 0.75),
@@ -265,13 +286,98 @@ class _TextWithOptionalQuote extends StatelessWidget {
         ),
         if (parts.body.isNotEmpty) ...[
           const SizedBox(height: 6),
-          SelectableText(
-            parts.body,
-            onTap: onTap,
-            style: TextStyle(fontSize: 16, color: fg),
-          ),
+          isVisitor
+              ? SelectableText(parts.body, onTap: onTap, style: style)
+              : _HtmlText(text: parts.body, style: style, onTap: onTap),
         ],
       ],
+    );
+  }
+}
+
+/// Renders text through the safe-HTML-subset parser (`buildMessageSpan`) so
+/// incoming/system messages can show bold/italic/underline/strike and
+/// tappable links (bare URLs get linkified too). Owns the tap recognizers
+/// `buildMessageSpan` creates for links and disposes them itself — nothing
+/// else holds a reference once a span tree is replaced, so skipping this
+/// would leak one `TapGestureRecognizer` per link on every rebuild.
+class _HtmlText extends StatefulWidget {
+  const _HtmlText({
+    required this.text,
+    required this.style,
+    this.onTap,
+    this.selectable = true,
+    this.textAlign,
+  });
+
+  final String text;
+  final TextStyle style;
+
+  /// Short tap on non-link text → action menu (same contract as
+  /// `SelectableText.onTap` in `_TextWithOptionalQuote`).
+  final VoidCallback? onTap;
+
+  /// `Text.rich` fallback for contexts that don't need selection (e.g. the
+  /// system message tile, which was never selectable).
+  final bool selectable;
+  final TextAlign? textAlign;
+
+  @override
+  State<_HtmlText> createState() => _HtmlTextState();
+}
+
+class _HtmlTextState extends State<_HtmlText> {
+  final _recognizers = <GestureRecognizer>[];
+
+  void _clearRecognizers() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+  }
+
+  Future<void> _openLink(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text("Не удалось открыть ссылку")),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _clearRecognizers();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // The previous build's recognizers belonged to a span tree this build
+    // replaces — drop them first so nothing leaks across rebuilds.
+    _clearRecognizers();
+    final theme = LivetexChatTheme.of(context);
+    final span = buildMessageSpan(
+      widget.text,
+      style: widget.style,
+      linkColor: theme.quoteAccent,
+      onOpenLink: _openLink,
+      recognizers: _recognizers,
+    );
+    if (widget.selectable) {
+      return SelectableText.rich(
+        span,
+        onTap: widget.onTap,
+        textAlign: widget.textAlign,
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      child: Text.rich(span, textAlign: widget.textAlign),
     );
   }
 }
@@ -478,6 +584,7 @@ class _MessageBubble extends StatelessWidget {
               _TextWithOptionalQuote(
                 text: caption,
                 fg: fg,
+                isVisitor: isVisitor,
                 onTap: onShowActions,
               ),
             ],
@@ -586,10 +693,14 @@ class _SystemMessageTile extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Center(
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
+        // Android parity: MessagesAdapter (line 522) parses HTML in system
+        // messages too — non-selectable like the plain Text it replaces,
+        // but links inside it are now tappable.
+        child: _HtmlText(
+          text: text,
           style: TextStyle(fontSize: 12, color: theme.systemText),
+          selectable: false,
+          textAlign: TextAlign.center,
         ),
       ),
     );
