@@ -198,6 +198,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
       );
       expect(leaves(span).any((l) => l.$3), isTrue);
     });
@@ -208,6 +209,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
       );
       expect(leaves(span).any((l) => l.$3), isTrue);
     });
@@ -313,6 +315,50 @@ void main() {
       expect(span.toPlainText(), "AT&T");
     });
 
+    test("real href wins over a data-href decoy attribute", () {
+      String? opened;
+      final recs = <GestureRecognizer>[];
+      final span = buildMessageSpan(
+        '<a data-href="https://evil.ru" href="https://good.ru">ссылка</a>',
+        style: style,
+        linkColor: linkColor,
+        onOpenLink: (u) => opened = u,
+        recognizers: recs,
+      );
+      final link = leaves(span).singleWhere((l) => l.$3);
+      expect(link.$1, "ссылка");
+      (recs.single as TapGestureRecognizer).onTap!();
+      expect(opened, "https://good.ru");
+    });
+
+    test("href not preceded by whitespace is not picked up (e.g. xhref)", () {
+      final span = buildMessageSpan(
+        '<a xhref="https://evil.ru">ссылка</a>',
+        style: style,
+        linkColor: linkColor,
+        onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
+      );
+      expect(leaves(span).any((l) => l.$3), isFalse);
+    });
+
+    test("out-of-range numeric entity does not throw, stays literal", () {
+      expect(
+        () => buildMessageSpan(
+          "<b>&#1114112; &#x110000;</b>",
+          style: style,
+          linkColor: linkColor,
+        ),
+        returnsNormally,
+      );
+      final span = buildMessageSpan(
+        "<b>&#1114112; &#x110000;</b>",
+        style: style,
+        linkColor: linkColor,
+      );
+      expect(span.toPlainText(), "&#1114112; &#x110000;");
+    });
+
     test("entities decoded inside href attribute value", () {
       String? opened;
       final recs = <GestureRecognizer>[];
@@ -350,18 +396,18 @@ void main() {
     });
 
     test("nesting deeper than 32 ignores deeper styles but keeps text", () {
-      final open = "<b>" * 40;
-      final close = "</b>" * 40;
+      // 32 <b> reach the cap; the 33rd style tag (<i>) must NOT apply — if
+      // the cap were deleted, the innermost leaf would also be italic.
+      final open = "<b>" * 32;
+      final close = "</b>" * 32;
       final span = buildMessageSpan(
-        "$open глубоко $close",
+        "$open<i>глубоко</i>$close",
         style: style,
         linkColor: linkColor,
       );
-      expect(span.toPlainText(), "$open глубоко $close"
-          .replaceAll("<b>", "")
-          .replaceAll("</b>", ""));
-      expect(leaves(span).any((l) => l.$2?.fontWeight == FontWeight.bold),
-          isTrue);
+      final innermost = leaves(span).singleWhere((l) => l.$1 == "глубоко");
+      expect(innermost.$2?.fontWeight, FontWeight.bold);
+      expect(innermost.$2?.fontStyle, isNot(FontStyle.italic));
     });
 
     test("oversized input returned as single plain span", () {
@@ -378,6 +424,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (u) => opened = u,
+        recognizers: <GestureRecognizer>[],
       );
       expect(span.toPlainText(), "a < b смотри www.livetex.ru");
       final link = leaves(span).singleWhere((l) => l.$3);
@@ -390,6 +437,36 @@ void main() {
           .onTap!();
       expect(opened, "https://www.livetex.ru");
     });
+
+    test("many unmatched '<' bails to a single plain span, fast", () {
+      final input = "<" * 32760;
+      final stopwatch = Stopwatch()..start();
+      final span = buildMessageSpan(input, style: style, linkColor: linkColor);
+      stopwatch.stop();
+      expect(span.toPlainText(), input);
+      expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+    });
+
+    test("many unmatched '<' in plainTextOfMessage bails fast too", () {
+      final input = "<" * 32760;
+      final stopwatch = Stopwatch()..start();
+      final result = plainTextOfMessage(input);
+      stopwatch.stop();
+      expect(result, input);
+      expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+    });
+
+    test("recognizer is not created when recognizers list is omitted", () {
+      final span = buildMessageSpan(
+        '<a href="https://livetex.ru">сайт</a>',
+        style: style,
+        linkColor: linkColor,
+        onOpenLink: (_) {},
+      );
+      final l = leaves(span)[0];
+      expect(l.$2?.decoration, TextDecoration.underline);
+      expect(l.$3, isFalse);
+    });
   });
 
   group("linkify", () {
@@ -400,6 +477,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (u) => opened = u,
+        recognizers: <GestureRecognizer>[],
       );
       final link = leaves(span).singleWhere((l) => l.$3);
       expect(link.$1, "https://livetex.ru");
@@ -417,6 +495,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
       );
       final link = leaves(span).singleWhere((l) => l.$3);
       expect(link.$1, "www.livetex.ru");
@@ -429,6 +508,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (u) => opened = u,
+        recognizers: <GestureRecognizer>[],
       );
       final link = leaves(span).singleWhere((l) => l.$3);
       expect(link.$1, "test@example.com");
@@ -446,6 +526,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
       );
       final link = leaves(span).singleWhere((l) => l.$3);
       expect(link.$1, "https://livetex.ru");
@@ -458,6 +539,7 @@ void main() {
         style: style,
         linkColor: linkColor,
         onOpenLink: (_) {},
+        recognizers: <GestureRecognizer>[],
       );
       final link = leaves(span).singleWhere((l) => l.$3);
       expect(link.$1, "https://livetex.ru");
@@ -477,6 +559,7 @@ void main() {
           style: style,
           linkColor: linkColor,
           onOpenLink: (_) {},
+          recognizers: <GestureRecognizer>[],
         );
         expect(
           leaves(span).any((l) => l.$3),

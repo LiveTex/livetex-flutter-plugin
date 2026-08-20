@@ -14,6 +14,24 @@ final _htmlTagPattern = RegExp(r'''<("[^"]*"|'[^']*'|[^'">])*>''');
 /// <("[^"]*"|'[^']*'|[^'">])*>
 bool containsHtml(String text) => _htmlTagPattern.hasMatch(text);
 
+// ponytail: the mandated containsHtml regex backtracks quadratically on
+// input with many "<" and no matching ">" (measured ~7.7s at the 32768-char
+// cap). Counting "<" is one cheap O(n) pass and runs before the regex ever
+// touches the string, bounding the worst case regardless of input shape —
+// callers must run this (and the length cap) before calling containsHtml
+// or walking the string.
+const _maxAngleBrackets = 128;
+
+bool _tooManyAngleBrackets(String source) {
+  var count = 0;
+  for (var i = 0; i < source.length; i++) {
+    if (source.codeUnitAt(i) == 0x3C && ++count > _maxAngleBrackets) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const _allowedSchemes = {"http", "https", "mailto", "tel"};
 
 bool _isAllowedUrl(String? url) {
@@ -34,16 +52,26 @@ const _namedEntities = {
 
 final _entityPattern = RegExp(r"&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);");
 
+// A numeric entity can spell out any integer int.tryParse accepts — code
+// points beyond U+10FFFF (or negative) make String.fromCharCode throw, so
+// out-of-range codes fall back to the entity text as-is instead of
+// crashing the build.
+bool _isValidCodePoint(int code) => code >= 0 && code <= 0x10FFFF;
+
 String _decodeEntities(String text) {
   return text.replaceAllMapped(_entityPattern, (m) {
     final body = m[1]!;
     if (body.startsWith("#x") || body.startsWith("#X")) {
       final code = int.tryParse(body.substring(2), radix: 16);
-      return code == null ? m[0]! : String.fromCharCode(code);
+      return code != null && _isValidCodePoint(code)
+          ? String.fromCharCode(code)
+          : m[0]!;
     }
     if (body.startsWith("#")) {
       final code = int.tryParse(body.substring(1));
-      return code == null ? m[0]! : String.fromCharCode(code);
+      return code != null && _isValidCodePoint(code)
+          ? String.fromCharCode(code)
+          : m[0]!;
     }
     return _namedEntities[body] ?? m[0]!;
   });
@@ -59,8 +87,11 @@ const _brTags = {"br"};
 typedef _Tag = ({String name, bool closing, String? href});
 
 final _tagNameEnd = RegExp(r"\s");
+// Anchored on (start-of-string | whitespace) so "data-href" / "xhref"
+// don't get mistaken for the real "href" attribute — the capture groups
+// keep the same indices since the boundary itself isn't captured.
 final _hrefPattern = RegExp(
-  '''href\\s*=\\s*("([^"]*)"|'([^']*)'|(\\S+))''',
+  '''(?:^|\\s)href\\s*=\\s*("([^"]*)"|'([^']*)'|(\\S+))''',
   caseSensitive: false,
 );
 
@@ -303,10 +334,10 @@ void _emitLinkified(
         TextStyle(decoration: TextDecoration.underline, color: linkColor),
       );
       GestureRecognizer? rec;
-      if (onOpenLink != null) {
+      if (onOpenLink != null && recognizers != null) {
         final resolved = url;
         rec = TapGestureRecognizer()..onTap = () => onOpenLink(resolved);
-        recognizers?.add(rec);
+        recognizers.add(rec);
       }
       leaves.add(TextSpan(text: raw, style: linkStyle, recognizer: rec));
     } else {
@@ -332,9 +363,12 @@ TextDecoration? _combineDecoration(bool underline, bool strike) {
 
 /// Parses the Android-parity HTML subset (plus linkify of bare URLs and
 /// emails in plain segments) into a TextSpan tree.
-/// [onOpenLink] receives the validated absolute URL on tap. When null,
-/// links still get link styling but no recognizer (used by tests and
-/// contexts without tap handling).
+/// [onOpenLink] receives the validated absolute URL on tap. A tap
+/// recognizer is only created when both [onOpenLink] and [recognizers]
+/// are supplied — without a list to collect it into, the recognizer could
+/// never be disposed, so links still get link styling but no recognizer
+/// (used by tests and contexts without tap handling) instead of leaking
+/// one every rebuild.
 /// Returned span's recognizers must be disposed by the caller —
 /// collect them via [recognizers].
 TextSpan buildMessageSpan(
@@ -344,7 +378,7 @@ TextSpan buildMessageSpan(
   void Function(String url)? onOpenLink,
   List<GestureRecognizer>? recognizers,
 }) {
-  if (source.length > _maxInputLength) {
+  if (source.length > _maxInputLength || _tooManyAngleBrackets(source)) {
     return TextSpan(text: source, style: style);
   }
   final leaves = <TextSpan>[];
@@ -363,10 +397,10 @@ TextSpan buildMessageSpan(
         TextStyle(decoration: TextDecoration.underline, color: linkColor),
       );
       GestureRecognizer? rec;
-      if (onOpenLink != null) {
+      if (onOpenLink != null && recognizers != null) {
         final url = run.linkUrl!;
         rec = TapGestureRecognizer()..onTap = () => onOpenLink(url);
-        recognizers?.add(rec);
+        recognizers.add(rec);
       }
       leaves.add(TextSpan(text: run.text, style: linkStyle, recognizer: rec));
     } else {
@@ -387,8 +421,10 @@ TextSpan buildMessageSpan(
 /// decoded, <br>/<p>/<li> become newlines. For non-HTML input returns
 /// the input unchanged.
 String plainTextOfMessage(String source) {
+  if (source.length > _maxInputLength || _tooManyAngleBrackets(source)) {
+    return source;
+  }
   if (!containsHtml(source)) return source;
-  if (source.length > _maxInputLength) return source;
   final buffer = StringBuffer();
   for (final run in _walkNodes(source)) {
     buffer.write(run.text);
