@@ -9,6 +9,7 @@ import "package:flutter/material.dart";
 import "package:livetex_chat/livetex_chat.dart";
 import "package:url_launcher/url_launcher.dart";
 
+import "bottom_anchored_scroll_controller.dart";
 import "livetex_chat_theme.dart";
 import "widgets/attributes_form.dart";
 import "widgets/bot_keyboard.dart";
@@ -71,7 +72,7 @@ class _LivetexChatScreenState extends State<LivetexChatScreen>
   bool _ownChat = false;
 
   final _textCtrl = TextEditingController();
-  final _scroll = ScrollController();
+  final _scroll = BottomAnchoredScrollController();
   final _subs = <StreamSubscription<dynamic>>[];
 
   /// Auto-follow tail only when the user is already at (or near) the bottom.

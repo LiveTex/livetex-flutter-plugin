@@ -39,12 +39,12 @@ Future<void> livetexFirebaseBackgroundHandler(RemoteMessage message) async {
   final text = message.data["text"] ?? message.notification?.body;
   if (text == null || text.isEmpty) return;
   final plugin = FlutterLocalNotificationsPlugin();
-  await plugin.initialize(_localInitSettings);
+  await plugin.initialize(settings: _localInitSettings);
   await plugin.show(
-    message.hashCode,
-    _channelName,
-    text,
-    _notificationDetails,
+    id: message.hashCode,
+    title: _channelName,
+    body: text,
+    notificationDetails: _notificationDetails,
     payload: _notificationPayload,
   );
 }
@@ -94,7 +94,7 @@ class LivetexChatPush with WidgetsBindingObserver {
     }
 
     await _localPlugin.initialize(
-      _localInitSettings,
+      settings: _localInitSettings,
       onDidReceiveNotificationResponse: (_) => onNotificationTap?.call(),
     );
 
@@ -156,10 +156,10 @@ class LivetexChatPush with WidgetsBindingObserver {
     final text = message.data["text"] ?? message.notification?.body;
     if (text == null || text.isEmpty) return;
     await _localPlugin.show(
-      message.hashCode,
-      _channelName,
-      text,
-      _notificationDetails,
+      id: message.hashCode,
+      title: _channelName,
+      body: text,
+      notificationDetails: _notificationDetails,
       payload: _notificationPayload,
     );
   }
